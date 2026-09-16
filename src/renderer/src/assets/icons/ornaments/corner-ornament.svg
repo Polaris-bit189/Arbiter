@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48">
+  <!-- 蚀刻角饰（左下角方向，可用 transform 镜像至其余三角） -->
+  <path d="M4 44V8a4 4 0 0 1 4-4h36" fill="none" stroke="#8A7130" stroke-width="1.25" stroke-linecap="round"/>
+  <path d="M10 44V14a4 4 0 0 1 4-4h30" fill="none" stroke="#6B5622" stroke-width="1" stroke-linecap="round"/>
+  <rect x="3.2" y="3.2" width="5.6" height="5.6" transform="rotate(45 6 6)" fill="#C9A227"/>
+</svg>

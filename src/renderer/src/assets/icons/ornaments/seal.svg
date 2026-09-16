@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 160">
+  <!-- 空状态大纹样：调律刻度环 + 蜂窝 + 转换箭头（低对比，作背景装饰） -->
+  <defs>
+    <marker id="arrow" viewBox="0 0 8 8" refX="5" refY="4" markerWidth="5.5" markerHeight="5.5" orient="auto">
+      <path d="M0 0.8 7 4 0 7.2Z" fill="#C9A227"/>
+    </marker>
+  </defs>
+  <circle cx="80" cy="80" r="76" fill="none" stroke="#6B5622" stroke-width="1"/>
+  <circle cx="80" cy="80" r="64" fill="none" stroke="#6B5622" stroke-width="0.75"/>
+  <circle cx="80" cy="80" r="52" fill="none" stroke="#8A7130" stroke-width="0.5"/>
+  <g stroke="#8A7130" stroke-width="1.25" stroke-linecap="round">
+    <line x1="80" y1="4" x2="80" y2="9"/>
+    <line x1="80" y1="4" x2="80" y2="9" transform="rotate(30 80 80)"/>
+    <line x1="80" y1="4" x2="80" y2="9" transform="rotate(60 80 80)"/>
+    <line x1="80" y1="4" x2="80" y2="9" transform="rotate(90 80 80)"/>
+    <line x1="80" y1="4" x2="80" y2="9" transform="rotate(120 80 80)"/>
+    <line x1="80" y1="4" x2="80" y2="9" transform="rotate(150 80 80)"/>
+    <line x1="80" y1="4" x2="80" y2="9" transform="rotate(180 80 80)"/>
+    <line x1="80" y1="4" x2="80" y2="9" transform="rotate(210 80 80)"/>
+    <line x1="80" y1="4" x2="80" y2="9" transform="rotate(240 80 80)"/>
+    <line x1="80" y1="4" x2="80" y2="9" transform="rotate(270 80 80)"/>
+    <line x1="80" y1="4" x2="80" y2="9" transform="rotate(300 80 80)"/>
+    <line x1="80" y1="4" x2="80" y2="9" transform="rotate(330 80 80)"/>
+  </g>
+  <rect x="78" y="14" width="4" height="4" transform="rotate(45 80 16)" fill="#8A7130"/>
+  <rect x="78" y="142" width="4" height="4" transform="rotate(45 80 144)" fill="#8A7130"/>
+  <rect x="14" y="78" width="4" height="4" transform="rotate(45 16 80)" fill="#8A7130"/>
+  <rect x="142" y="78" width="4" height="4" transform="rotate(45 144 80)" fill="#8A7130"/>
+  <path d="M80 50l25.98 15v30L80 110l-25.98-15V65z" fill="none" stroke="#8A7130" stroke-width="1.25"/>
+  <path d="M85.69 58.75A22 22 0 0 1 101.25 74.31" fill="none" stroke="#C9A227" stroke-width="1.25" stroke-linecap="round" marker-end="url(#arrow)"/>
+  <path d="M74.31 101.25A22 22 0 0 1 58.75 85.69" fill="none" stroke="#C9A227" stroke-width="1.25" stroke-linecap="round" marker-end="url(#arrow)"/>
+  <rect x="76" y="76" width="8" height="8" transform="rotate(45 80 80)" fill="#C9A227"/>
+</svg>
