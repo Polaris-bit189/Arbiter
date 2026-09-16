@@ -1,0 +1,115 @@
+name: 转换失败 / Bug 报告
+description: 某个文件转不出来、转出来是坏的、或者界面不对
+title: '[Bug] '
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## 先说一件事：引擎自己报的错，比我问你的任何问题都有用
+
+        Arbiter 是**外壳**——真正干活的是 FFmpeg / sharp / 7-Zip / LibreOffice / Calibre / pandoc。
+        转换失败时，界面会把**引擎自己打印的原始错误**原样显示给你。
+
+        请**把那一段复制进来**。它通常直接指出问题（缺依赖、编码不支持、文件损坏、
+        路径里有非法字符…），有它我往往看一眼就知道；没有它，我只能猜。
+
+  - type: textarea
+    id: engine-error
+    attributes:
+      label: 引擎报的原始错误
+      description: 界面失败提示里那段原始输出，原样粘贴，不要改写、不要只写结论。
+      placeholder: |
+        例如：
+        Error opening output files: Invalid argument
+        ...
+      render: text
+    validations:
+      required: true
+
+  - type: dropdown
+    id: source-category
+    attributes:
+      label: 源文件属于哪一类
+      options:
+        - 视频 (mkv/mp4/avi/mov/…)
+        - 音频 (mp3/wav/flac/aac/…)
+        - 图片 (png/jpg/webp/gif/heic/…)
+        - 文档 (md/txt/docx/pdf/xlsx/…)
+        - 电子书 (epub/mobi/azw3/…)
+        - 压缩包 (zip/7z/tar/rar/…)
+        - 不确定 / 拖进去根本没反应
+    validations:
+      required: true
+
+  - type: input
+    id: conversion
+    attributes:
+      label: 源格式 → 目标格式
+      description: 写扩展名就行，例如 `heic → jpg`、`doc → pdf`。
+      placeholder: heic → jpg
+    validations:
+      required: true
+
+  - type: dropdown
+    id: engine-downloaded
+    attributes:
+      label: 这次转换是否提示过「需要先下载引擎」
+      description: >
+        LibreOffice、Calibre、pandoc 不在安装包里，第一次用到时才会下载。
+        这类失败和「下载失败」是两回事，所以要先分清。
+      options:
+        - 没有提示，直接开始转换
+        - 提示了，我点了下载并且下载成功
+        - 提示了，但下载失败 / 卡住
+        - 不确定
+    validations:
+      required: true
+
+  - type: input
+    id: app-version
+    attributes:
+      label: Arbiter 版本
+      description: 关于页里能看到，形如 `0.1.0`。
+      placeholder: 0.1.0
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: Windows 版本
+      description: 按 `Win+R` 输入 `winver` 就能看到。
+      placeholder: Windows 11 24H2 (26100)
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: 你期望发生什么，实际发生了什么
+      description: 只在上面那段报错不足以说明问题时补充。别在这里重复粘贴报错。
+    validations:
+      required: false
+
+  - type: input
+    id: filename
+    attributes:
+      label: 出问题的文件名（如果可能相关）
+      description: >
+        文件名里的特殊字符（空格、引号、`&`、`$()`、emoji、超长中文名）是已知的一类成因。
+        不必给完整路径，但**请保留特殊字符本身**——把 `a&b.mp4` 改写成 `ab.mp4` 就把线索抹掉了。
+      placeholder: '季度报告 (最终版) — 第2部分 &.mp4'
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: file-shareable
+    attributes:
+      label: 关于样本文件
+      options:
+        - label: >
+            如果需要，我可以提供一个能复现的最小样本（能公开的话最好——很多问题
+            只有拿到真实文件才查得下去；不能公开也没关系，说明一下就行）。
+          required: false

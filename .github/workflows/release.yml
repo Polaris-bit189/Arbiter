@@ -1,0 +1,135 @@
+name: Release
+
+# 打一个 `v*` 标签就发布。发布前会把快的几套测试再跑一遍——
+# 一个坏掉的安装包发出去，比晚发半小时贵得多。
+#
+# 产物是**瘦包**：不含 LibreOffice / Calibre / pandoc（约 2.4 GiB），
+# 它们由用户首次使用时按需下载。见 electron-builder.yml 文件头。
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+# 创建 Release 需要写权限。默认的 GITHUB_TOKEN 就够，不必另配 secret。
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and publish
+    runs-on: windows-latest
+    env:
+      NPM_CONFIG_REGISTRY: https://registry.npmjs.org/
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Drop the China-only npm mirror
+        shell: bash
+        run: rm -f .npmrc
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      # build:win 自身已经带了 typecheck（脚本是 `npm run build && electron-builder --win`），
+      # 这里补的是「逻辑坏了」这一类——安装包能构建出来不等于程序是对的。
+      - name: Lint
+        run: npm run lint
+
+      - name: Unit tests
+        run: |
+          npm run test:core
+          npm run test:doc
+          npm run test:downlink
+
+      # ⚠️ **这一步以前漏了，是个真阻断**：`electron-builder.yml` 的 `extraResources`
+      #    要从 `resources/engines/` 取 `7zip-full/`（RAR 支持全靠它），而那个目录是
+      #    gitignore 的、runner 上是干净 clone —— 不 fetch 的话 `from` 指向一个不存在的路径，
+      #    electron-builder 直接报错，**打 tag 只会得到一个失败的 job**。
+      #    `nightly.yml` 一直是对的（它本来就要跑真 7z），这个 job 漏了。
+      #
+      #    只 fetch 7z 不 fetch pandoc：`extraResources` 的 filter 明确排除了 pandoc
+      #    （221 MB，用户按需下载），打包用不到它。
+      - name: Cache fetched engines
+        uses: actions/cache@v4
+        with:
+          path: resources/engines
+          key: engines-${{ runner.os }}-${{ hashFiles('scripts/fetch-*.mjs') }}
+
+      - name: Fetch bundled engines
+        run: node scripts/fetch-bundled-engines.mjs
+
+      - name: Build Windows installer
+        run: npm run build:win
+
+      # README 里让用户「对照 Release notes 里的 SHA-256 校验」，所以这里必须真的产出它，
+      # 否则那句承诺就是空话。
+      - name: Compute checksums
+        shell: pwsh
+        run: |
+          Get-ChildItem dist/*.exe | ForEach-Object {
+            $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
+            "$hash  $($_.Name)"
+          } | Out-File -FilePath dist/SHA256SUMS.txt -Encoding utf8
+          Get-Content dist/SHA256SUMS.txt
+
+      # ⚠️ 瘦包体积极小，但**不含**重型引擎。发布前确认这一步的产物大小：
+      #    正常约 100~150 MB。若是 GB 级，说明 electron-builder.yml 的
+      #    `!resources/engines/libreoffice/**` 那三条排除规则没生效。
+      - name: Report artifact sizes
+        shell: pwsh
+        run: Get-ChildItem dist | Select-Object Name, @{N='MB';E={[math]::Round($_.Length/1MB,1)}}
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          # 先发成草稿：安装包**未签名**，发布说明里要写清 SmartScreen 的处理方式，
+          # 手动过一眼再点发布。
+          draft: true
+          generate_release_notes: true
+          # ⚠️ `dist/latest.yml` **刻意不在这一行**（2026-09-15，审计 O2）。
+          # electron-builder.yml 里那句 `publish: null` 让 electron-builder 不再反推
+          # GitHub 发布源，代价就是 `latest.yml` 与 `resources/app-update.yml` 一起消失
+          # （两者同一个判据，拆不开）。而 `latest.yml` 是 electron-updater 的更新清单，
+          # 本项目没有装 electron-updater、没有任何代码读它——列在这里只会让发版时
+          # action 报一句 unmatched pattern（`fail_on_unmatched_files` 默认 false，不报错，
+          # 很难发现）。将来真接了自动更新，把它连同 `publish:` 一起加回来。
+          files: |
+            dist/*.exe
+            dist/*.blockmap
+            dist/SHA256SUMS.txt
+          body: |
+            ## 安装
+
+            下载 `Arbiter-*-setup.exe` 并运行。
+
+            > ⚠️ **安装包未签名。** Windows SmartScreen 会警告，点「更多信息 → 仍要运行」。
+            > 介意的话可以对照下方的 SHA-256 校验文件完整性。
+
+            ## 校验
+
+            ```
+            certutil -hashfile "Arbiter-x.y.z-setup.exe" SHA256
+            ```
+
+            与 `SHA256SUMS.txt` 中的值比对。
+
+            ## 关于瘦包
+
+            安装包**不含** LibreOffice / Calibre / pandoc（合计约 2.4 GiB）。
+            第一次转换需要它们的格式时，应用会提示并从官方源下载，带 SHA-256 校验与断点续传。
+            FFmpeg、sharp、7-Zip 已包含，视频/音频/图片/压缩包转换开箱即用。
+
+            ---
+
+            首次使用请读 [README](https://github.com/${{ github.repository }}#readme)。
+            遇到问题请附上**引擎自己报的错**（应用会原样显示），那比任何描述都有用。
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

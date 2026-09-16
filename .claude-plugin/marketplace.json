@@ -1,0 +1,15 @@
+{
+  "name": "arbiter",
+  "description": "Arbiter（调律者转换器）的 Claude Code 插件",
+  "owner": {
+    "name": "Polaris"
+  },
+  "plugins": [
+    {
+      "name": "arbiter",
+      "source": "./plugins/arbiter",
+      "description": "格式转换：视频 / 音频 / 图片 / 文档 / PDF / 电子书 / 压缩包互转。自带 MCP 工具（inspect_file / convert_file / batch_convert / get_job_status / list_jobs / cancel_job / list_supported_formats / read_document）与 /arbiter:convert、/arbiter:formats、/arbiter:watch 三个命令；另有一个 PreToolUse(Read) hook，Read 一个 .docx 时自动先转成临时 Markdown（只改写、从不拦截）。插件不含引擎，借用本机已安装的 Arbiter 应用。",
+      "category": "development"
+    }
+  ]
+}

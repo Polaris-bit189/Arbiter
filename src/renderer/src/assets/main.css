@@ -1,0 +1,133 @@
+/*
+ * 黑金主题底座。分三层，顺序不能换：
+ *
+ *   1. `@import 'tailwindcss' source(none)` —— 关掉 v4 的自动内容探测。
+ *      v4 在没有 tailwind.config.* 时靠扫描文件系统猜内容集，新加的目录
+ *      （比如后续的 pages/）一旦没被猜到，表现是「类名没生成、元素没样式、
+ *      零报错」，排查起来极费时间。下面用显式 @source 把内容集钉死。
+ *   2. `@import './theme.css'` —— 设计交付物的副本，`--c-*` 色板的唯一真相源。
+ *   3. `@theme inline` —— 把 `--c-*` 桥接成 Tailwind 工具类（bg-canvas / text-gold …）。
+ *      必须带 `inline`：它让 `bg-gold` 直接编译成 `background-color: var(--c-gold)`，
+ *      与 theme.css 一对一。裸 `@theme` 会先把值快照进 `--color-gold` 再引用，
+ *      多一层间接，改 theme.css 时容易对不上。
+ *
+ * 变量名与 theme.css 里的 `--c-*` 必须一一对应；写错一个的表现是
+ * 「类名生成了但取不到值、元素透明」，同样零报错。改动时逐个核对。
+ */
+@import 'tailwindcss' source(none);
+@import './theme.css';
+
+/* 相对本文件：src/renderer/**，即 index.html + src/**，将来新增的 pages/ 也在内 */
+@source '../../**/*.{ts,tsx,html}';
+
+@theme inline {
+  /* —— 底色 ——
+     窗口主背景叫 `canvas` 而不是 `base`，是**刻意避开一个静默坑**：
+     v4 里 `text-*` 同时匹配 `--text-*`（字号）与 `--color-*`（颜色）两个命名空间，
+     而实测**颜色优先**。所以一旦这里有 `--color-base`，`text-base` 编译出来的就是
+     `color: var(--c-bg)`（近乎纯黑）而不是 font-size: 1rem——
+     在深色底上就是一行看不见的字，且零报错。
+     换个名字就没有这个歧义，比记住「这里不能用 text-base」可靠。 */
+  --color-abyss: var(--c-bg-deep);
+  --color-canvas: var(--c-bg);
+  --color-panel: var(--c-bg-panel);
+  --color-raised: var(--c-bg-elevated);
+  --color-hover: var(--c-bg-hover);
+  --color-track: var(--c-track);
+
+  /* —— 描边 —— */
+  --color-line: var(--c-border);
+  --color-line-2: var(--c-border-strong);
+
+  /* —— 金系 —— */
+  --color-gold: var(--c-gold);
+  --color-gold-bright: var(--c-gold-bright);
+  --color-gold-pale: var(--c-gold-pale);
+  --color-gold-dim: var(--c-gold-dim);
+  --color-gold-deep: var(--c-gold-deep);
+
+  /* —— 文字（刻意不叫 --color-text-*，否则会生成 text-text-2 这种别扭类名） —— */
+  --color-fg: var(--c-text);
+  --color-fg-muted: var(--c-text-2);
+  --color-fg-faint: var(--c-text-3);
+
+  /* —— 状态 —— */
+  --color-ok: var(--c-success);
+  --color-bad: var(--c-error);
+
+  /* —— 字体（源变量带 -src 后缀，见 theme.css 的改动一） —— */
+  --font-display: var(--font-display-src);
+  --font-body: var(--font-body-src);
+  --font-mono: var(--font-mono-src);
+
+  /* —— 圆角 —— */
+  --radius-card: 6px;
+  --radius-tile: 14px;
+}
+
+/*
+ * 固定深色：不再跟随 prefers-color-scheme。
+ * 这顺带让原生滚动条、原生 <select> 的下拉面板、<input> 变深色，
+ * 所以 TargetFormatSelect.tsx 那个刻意的原生 <select> 不需要改成自绘下拉。
+ */
+:root {
+  color-scheme: dark;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  overflow: hidden;
+  user-select: none;
+  /* 窗口底色与正文色也在这里兜底：滚动条的 thumb 用 currentColor，
+     外层没有 color 的话滚动条就是黑的 */
+  background: var(--c-bg);
+  color: var(--c-text);
+  font-family: var(--font-body-src);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* 自绘标题栏的拖拽区；其上的可交互元素必须显式排除，否则点不动 */
+.drag-region {
+  -webkit-app-region: drag;
+}
+.no-drag {
+  -webkit-app-region: no-drag;
+}
+
+/* 细滚动条，跟随主题 */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: color-mix(in oklab, currentColor 18%, transparent);
+  border-radius: 9999px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in oklab, currentColor 32%, transparent);
+  background-clip: content-box;
+}
+
+/* 不确定进度条的滑动动画，用于 pandoc / LibreOffice 这类拿不到百分比的引擎 */
+@keyframes indeterminate-slide {
+  0% {
+    transform: translateX(-100%) scaleX(0.4);
+  }
+  100% {
+    transform: translateX(250%) scaleX(0.4);
+  }
+}
+.indeterminate-bar {
+  animation: indeterminate-slide 1.4s ease-in-out infinite;
+}
