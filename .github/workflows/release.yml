@@ -71,7 +71,7 @@ jobs:
         run: Get-ChildItem dist | Select-Object Name, @{N='MB';E={[math]::Round($_.Length/1MB,1)}}
 
       - name: Publish release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           # 先发成草稿：安装包**未签名**，发布说明里要写清 SmartScreen 的处理方式，
           # 手动过一眼再点发布。
