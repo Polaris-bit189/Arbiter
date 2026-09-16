@@ -24,7 +24,7 @@ jobs:
       NPM_CONFIG_REGISTRY: https://registry.npmjs.org/
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Drop the China-only npm mirror
         shell: bash
