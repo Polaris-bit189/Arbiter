@@ -1,0 +1,51 @@
+version: 2
+
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+    commit-message:
+      prefix: 'chore(deps)'
+    groups:
+      # 补丁与小版本合到一个 PR 里。这个仓库的 CI 要真起 Electron、真跑 ffmpeg，
+      # 一个依赖一个 PR 的话，队列会排到没人看。
+      minor-and-patch:
+        applies-to: version-updates
+        update-types:
+          - minor
+          - patch
+
+    ignore:
+      # ---- 以下是**版本陷阱**，不要放开（docs/NOTES.md 约束 7）----
+      #
+      # npm 上 `vite@latest` 已经是 8.x、`typescript@latest` 已经是 7.x（Go 重写版），
+      # electron-vite 5 两个都不兼容。大版本必须人工升，且要先跑通全套自测。
+      #
+      # ⚠️ 这三个 ignore 只挡 dependabot 的 PR，挡不住 `npm update` 与人工 `npm i`。
+      #    真升之前读一遍约束 7，升完必须 `npm run test` + `npm run falsify` 双绿。
+      - dependency-name: vite
+        update-types: ['version-update:semver-major']
+      - dependency-name: typescript
+        update-types: ['version-update:semver-major']
+      - dependency-name: electron
+        update-types: ['version-update:semver-major']
+      # sharp 一旦跳大版本，图片路由里那张「实测出来的编码器白名单」
+      # （shared/formats.ts 的 SHARP_IMAGE_TARGETS）就可能过期——bmp/ico 是否仍写不出，
+      # 要重新实测才知道。见 CONTRIBUTING.md。
+      - dependency-name: sharp
+        update-types: ['version-update:semver-major']
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    labels:
+      - dependencies
+      - ci
+    commit-message:
+      prefix: 'chore(ci)'

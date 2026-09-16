@@ -1,0 +1,128 @@
+name: CI
+
+# 每个 push 与 PR 都跑。慢的那几套（真实子进程、Electron）在 nightly.yml 里。
+#
+# **只跑 Windows**，两个原因，都不是临时决定：
+#   1. 首发只支持 Windows——重型引擎靠 `msiexec /a` 解包，那是 Windows 独有的（约束 16）
+#   2. `test:core` / `test:doc` 里有一批依赖 Windows 路径语义的断言（反斜杠、盘符、
+#      大小写不敏感）。**它们能否在 ubuntu-latest 上跑通尚未实测**——在这一点验清楚之前
+#      加 Linux 矩阵只会得到一条常年红的流水线，那条线很快就会被所有人忽略。
+#      验过之后再加，别猜。
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: Checks
+    runs-on: windows-latest
+    env:
+      # 仓库里的 .npmrc 指向 npmmirror（国内快、海外慢）。CI runner 在海外，覆盖掉它。
+      # 下面还会把文件删掉——env 与文件双保险，因为这个仓库的 .npmrc 是**项目级**的，
+      # 优先级规则改过几次，不值得赌。
+      NPM_CONFIG_REGISTRY: https://registry.npmjs.org/
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Drop the China-only npm mirror
+        shell: bash
+        run: rm -f .npmrc
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      # npm ci 会触发 ffmpeg-static 的 postinstall（下载 ffmpeg 二进制）
+      # 与 electron-builder install-app-deps，都要联网，耗时以分钟计。
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      # docs/FORMATS.md 是**生成产物**（scripts/gen-formats-doc.mjs 直接 import
+      # src/shared/formats.ts，按 targetsFor() / engineFor() 输出整张表）。
+      # 有人改了能力矩阵却忘了重新生成时，这里会红。
+      #
+      # 为什么值得单开一步：手写的能力矩阵等于同一个事实有两个副本，而对不上的方向
+      # 永远是「对外承诺了做不到的转换」——README 里那句 "the app only offers targets
+      # that actually work" 就是靠这条守住的。比在 PR 模板里写「记得更新文档」可靠。
+      #
+      # 行尾不会造成误报：.gitattributes 钉的是 `* text=auto eol=lf`。
+      - name: Check docs/FORMATS.md is up to date
+        run: |
+          npm run gen:formats
+          git diff --exit-code docs/FORMATS.md
+
+      # 纯逻辑，秒级。这三个不出问题说明改动没伤到共用层。
+      - name: Unit tests
+        run: |
+          npm run test:core
+          npm run test:doc
+          npm run test:downlink
+
+      # 下面两步是 i18n 改造（P0）之前就立好的两道网，都是**秒级、纯读源码**的结构判据：
+      #
+      #   - preload 依赖图（约束 1 的机器化守卫）：`sandbox: true` 的 preload 里
+      #     `require()` 只能解析 electron，任何被 externalize 的 npm 依赖都会让它整个崩掉，
+      #     表现是 `window.api` 未定义、拖拽毫无反应。i18n 的字典**绝不能被拖进去**，
+      #     这道闸门要在第一行写下去的时候就红，而不是等打包后发现。
+      - name: Guard the preload dependency graph
+        run: npm run test:preload-imports
+
+      #   - 15 支 falsify 脚本的锚点总检：有人重构了被变异覆盖的代码、锚点跟丢时，
+      #     这里几秒就报出来。少了它，锚点过期要等**一整轮反证**才发现
+      #     （falsify:tasks 22 分钟、falsify:mcp 141 秒），而报出来的文案长得像
+      #     「断言抓不住错误」——会诱人去放宽断言，方向正好反了（约束 33 记过这次事故）。
+      - name: Check falsify anchors still hit
+        run: npm run test:anchors
+
+  falsify:
+    name: Falsification
+    runs-on: windows-latest
+    env:
+      NPM_CONFIG_REGISTRY: https://registry.npmjs.org/
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Drop the China-only npm mirror
+        shell: bash
+        run: rm -f .npmrc
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      # falsify 里有一套（pandoc）要真起 pandoc 子进程，得先把二进制拉下来。
+      # 缓存路径与 fetch 脚本的 DEST 一致：resources/engines/pandoc。
+      - name: Cache fetched engines
+        uses: actions/cache@v4
+        with:
+          path: resources/engines
+          key: engines-${{ runner.os }}-${{ hashFiles('scripts/fetch-*.mjs') }}
+
+      - name: Fetch pandoc
+        run: node scripts/fetch-pandoc.mjs
+
+      # 这一步是这个项目最有价值的一条 CI：
+      # 它把被测代码逐处改坏，确认断言真的会翻红。
+      # 一条永远通过的装饰性断言，只有在这里才会露出来。
+      - name: Falsify (mutation testing)
+        run: npm run falsify

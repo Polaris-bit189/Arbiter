@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 13.86 24">
+  <!-- 金色蜂窝纹（可平铺）· 调律者黑底金蜂窝刺绣的平面化 -->
+  <g fill="none" stroke="#8A7130" stroke-width="0.7">
+    <path d="M6.93-2 13.86 2v8l-6.93 4-6.93-4V2z"/>
+    <path d="M0 10l6.93 4v8L0 26l-6.93-4v-8z"/>
+    <path d="M13.86 10l6.93 4v8l-6.93 4-6.93-4v-8z"/>
+  </g>
+</svg>

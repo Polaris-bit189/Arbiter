@@ -1,0 +1,29 @@
+node_modules
+dist
+out
+.DS_Store
+.eslintcache
+*.log*
+
+# 三套 tsconfig 里 composite: true 的增量缓存。跑一次 tsc --noEmit 就会在仓库根
+# 冒出来一个，不入库——它只记录上次的类型检查状态，删掉会自己重建。
+*.tsbuildinfo
+
+# 自测与基准的临时目录（脚本跑完会自己删，中途中断才会残留）
+.tmp-*
+
+# 第三方引擎二进制（约 2.4 GB：解包出来的 LibreOffice 1.6G、Calibre 631M、pandoc 221M，
+# 外加 7z 完整版 2.4M）。全部可再生，见 scripts/fetch-*.mjs 与 CLAUDE.md 约束 16。
+# 不入库：它是下载物，不是源码。
+# ⚠️ git status 干净 ≠ 安装包小：打包看的是 electron-builder.yml 的 files 规则，不看这里。
+resources/engines/
+
+# Claude Code 的本机设置（含本机路径与授权记录），各人不同
+.claude/settings.local.json
+
+
+# Claude Code 的 agent 工作树（含各自的 node_modules），绝不能入库
+.claude/worktrees/
+
+# Nezha 的仓库级配置：本地 AI 任务工具的设置，各人不同，对项目本身零引用
+.nezha/

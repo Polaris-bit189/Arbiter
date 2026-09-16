@@ -1,0 +1,17 @@
+{
+  "description": "PreToolUse(Read)：Read 一个 .docx / .xlsx / .doc / .odt / .epub 时，先用 arbiter CLI 把它转成一份临时 Markdown/CSV/文本，再把这次读取改写到那份临时产物上。⚠️ 这是**改写**，不是拦截：找不到应用、没有 CLI、引擎没装、转换失败、超时——任何一条不成立都原样放行，绝不挡住用户正常的 Read。",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Read",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/read-convert.mjs\"",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}

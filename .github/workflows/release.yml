@@ -1,0 +1,204 @@
+name: Release
+
+# 打一个 `v*` 标签就发布。发布前会把快的几套测试再跑一遍——
+# 一个坏掉的安装包发出去，比晚发半小时贵得多。
+#
+# 产物是**瘦包**：不含 LibreOffice / Calibre / pandoc（约 2.4 GiB），
+# 它们由用户首次使用时按需下载。见 electron-builder.yml 文件头。
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+# 创建 Release 需要写权限。默认的 GITHUB_TOKEN 就够，不必另配 secret。
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and publish
+    runs-on: windows-latest
+    env:
+      NPM_CONFIG_REGISTRY: https://registry.npmjs.org/
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Drop the China-only npm mirror
+        shell: bash
+        run: rm -f .npmrc
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      # build:win 自身已经带了 typecheck（脚本是 `npm run build && electron-builder --win`），
+      # 这里补的是「逻辑坏了」这一类——安装包能构建出来不等于程序是对的。
+      - name: Lint
+        run: npm run lint
+
+      - name: Unit tests
+        run: |
+          npm run test:core
+          npm run test:doc
+          npm run test:downlink
+
+      # ⚠️ **这一步以前漏了，是个真阻断**：`electron-builder.yml` 的 `extraResources`
+      #    要从 `resources/engines/` 取 `7zip-full/`（RAR 支持全靠它），而那个目录是
+      #    gitignore 的、runner 上是干净 clone —— 不 fetch 的话 `from` 指向一个不存在的路径，
+      #    electron-builder 直接报错，**打 tag 只会得到一个失败的 job**。
+      #    `nightly.yml` 一直是对的（它本来就要跑真 7z），这个 job 漏了。
+      #
+      #    只 fetch 7z 不 fetch pandoc：`extraResources` 的 filter 明确排除了 pandoc
+      #    （221 MB，用户按需下载），打包用不到它。
+      - name: Cache fetched engines
+        uses: actions/cache@v4
+        with:
+          path: resources/engines
+          key: engines-${{ runner.os }}-${{ hashFiles('scripts/fetch-*.mjs') }}
+
+      - name: Fetch bundled engines
+        run: node scripts/fetch-bundled-engines.mjs
+
+      - name: Build Windows installer
+        run: npm run build:win
+
+      # README 里让用户「对照 Release notes 里的 SHA-256 校验」，所以这里必须真的产出它，
+      # 否则那句承诺就是空话。
+      - name: Compute checksums
+        shell: pwsh
+        run: |
+          Get-ChildItem dist/*.exe | ForEach-Object {
+            $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
+            "$hash  $($_.Name)"
+          } | Out-File -FilePath dist/SHA256SUMS.txt -Encoding utf8
+          Get-Content dist/SHA256SUMS.txt
+
+          # ⚠️ 发布说明里让用户「比对下面的 SHA-256」，那个值就必须真的印在说明上。
+          #    只产出 SHA256SUMS.txt 的话，用户得先下载附件才能对——那句承诺等于空话。
+          $exe = Get-ChildItem dist/*.exe | Select-Object -First 1
+          "SETUP_NAME=$($exe.Name)" >> $env:GITHUB_ENV
+          "SETUP_SHA256=$((Get-FileHash $exe.FullName -Algorithm SHA256).Hash.ToLower())" >> $env:GITHUB_ENV
+
+      # ⚠️ 瘦包体积极小，但**不含**重型引擎。发布前确认这一步的产物大小：
+      #    正常约 100~150 MB。若是 GB 级，说明 electron-builder.yml 的
+      #    `!resources/engines/libreoffice/**` 那三条排除规则没生效。
+      - name: Report artifact sizes
+        shell: pwsh
+        run: Get-ChildItem dist | Select-Object Name, @{N='MB';E={[math]::Round($_.Length/1MB,1)}}
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          # 先发成草稿：安装包**未签名**，发布说明里要写清 SmartScreen 的处理方式，
+          # 手动过一眼再点发布。
+          draft: true
+          generate_release_notes: true
+          # ⚠️ `dist/latest.yml` **刻意不在这一行**（2026-09-15，审计 O2）。
+          # electron-builder.yml 里那句 `publish: null` 让 electron-builder 不再反推
+          # GitHub 发布源，代价就是 `latest.yml` 与 `resources/app-update.yml` 一起消失
+          # （两者同一个判据，拆不开）。而 `latest.yml` 是 electron-updater 的更新清单，
+          # 本项目没有装 electron-updater、没有任何代码读它——列在这里只会让发版时
+          # action 报一句 unmatched pattern（`fail_on_unmatched_files` 默认 false，不报错，
+          # 很难发现）。将来真接了自动更新，把它连同 `publish:` 一起加回来。
+          files: |
+            dist/*.exe
+            dist/*.blockmap
+            dist/SHA256SUMS.txt
+          body: |
+            ## Arbiter 0.3.3
+
+            A file converter for Windows that keeps everything on your machine. Six
+            families in one app: video, audio, image, document, ebook and archive. Drop
+            in a `.mkv` and a `.docx` together and it works out what each one can
+            become, then routes it to the right engine. Nothing is uploaded, and there
+            is an MCP server so an agent can drive it.
+
+            Windows 上的本地格式转换器，六类文件一个界面：视频、音频、图片、文档、电子书、
+            压缩包。`.mkv` 和 `.docx` 一起拖进去也行——它自己判断每个能变成什么、该送到哪个
+            引擎。全程在本机完成，不上传；另外带一个 MCP server，agent 可以直接调用。
+
+            ### What is new in 0.3.3 · 这一版新增
+
+            Nothing here changes what an existing conversion produces.
+
+            这一版不改变任何既有转换的结果。
+
+            - **Global shortcuts.** `Ctrl+O` opens files, `Enter` starts the queue,
+              `Esc` cancels whatever is running. `Enter` is ignored while an input
+              method is composing, so picking a Pinyin candidate does not start a batch.
+
+              **全局快捷键。** `Ctrl+O` 收入文件、`Enter` 开始调律、`Esc` 取消正在跑的。
+              输入法组字时 Enter 不接管——用拼音选词的那一下不会把整批任务启动起来。
+            - **`--recipe` for the command line.** A small JSON file holding the options
+              you keep reusing, such as `{"target": "mp4", "mode": "remux"}`. Keys that
+              are not recognized are reported instead of being silently ignored.
+
+              **命令行配方文件。** 把常用的那套选项存成一份 JSON。认不出的字段会报出来，
+              不会默默忽略。
+            - **Queue priority** on the MCP tools, and **opt-in thumbnails** for image
+              outputs (`ARBITER_MCP_THUMBNAILS=1`).
+
+              MCP 工具加了**队列优先级**；图片产物可以**选带一张缩略图**。
+
+            The full list is in
+            [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md).
+
+            完整清单见
+            [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md)。
+
+            ### Install · 安装
+
+            Download `${{ env.SETUP_NAME }}` below and run it. No admin rights needed.
+
+            下载下方的 `${{ env.SETUP_NAME }}` 运行即可，不需要管理员权限。
+
+            > ⚠️ **The installer is not code-signed**, so Windows SmartScreen will warn
+            > you the first time: click **More info → Run anyway**. If you would rather
+            > check it first, compare the SHA-256 below.
+            >
+            > ⚠️ **安装包未签名**，Windows SmartScreen 第一次会拦：点「更多信息 → 仍要运行」。
+            > 想先核对的话，比对下面的 SHA-256。
+
+            ```
+            ${{ env.SETUP_SHA256 }}  ${{ env.SETUP_NAME }}
+            ```
+
+            ```
+            certutil -hashfile "${{ env.SETUP_NAME }}" SHA256
+            ```
+
+            ### About the slim package · 关于瘦包
+
+            FFmpeg, sharp and 7-Zip are bundled (about 100 MB), so video, audio, image
+            and archive conversion works out of the box. LibreOffice, Calibre and pandoc
+            are **not**: together they are roughly 2.4 GB. The app downloads one from
+            its official source the first time a conversion needs it, with SHA-256
+            verification and resume support. You can decline the download, and
+            everything else keeps working.
+
+            FFmpeg、sharp、7-Zip 已包含（约 100 MB），视频 / 音频 / 图片 / 压缩包开箱即用。
+            LibreOffice、Calibre、pandoc **不含**（合计约 2.4 GB）：第一次用到时才从官方源
+            下载，带 SHA-256 校验与断点续传。你也可以拒绝下载，其余功能照常。
+
+            ### When something fails · 转换失败时
+
+            The engine's own error message is shown as-is, so if you report a problem,
+            paste that. It says more than any description of it.
+
+            应用会**原样显示引擎自己报的错**。反馈问题时把那段贴上来——它比任何转述都有用。
+
+            New here? The [README](https://github.com/${{ github.repository }}#readme)
+            covers what it converts and what it deliberately does not.
+
+            第一次用请看 [README](https://github.com/${{ github.repository }}#readme)，
+            里面写了它能转什么、以及哪些是刻意不做的。
+        env:
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
