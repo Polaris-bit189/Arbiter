@@ -42,7 +42,7 @@ jobs:
         run: npm ci
 
       - name: Cache fetched engines
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: resources/engines
           key: engines-${{ runner.os }}-${{ hashFiles('scripts/fetch-*.mjs') }}

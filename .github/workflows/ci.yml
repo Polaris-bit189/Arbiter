@@ -113,7 +113,7 @@ jobs:
       # falsify 里有一套（pandoc）要真起 pandoc 子进程，得先把二进制拉下来。
       # 缓存路径与 fetch 脚本的 DEST 一致：resources/engines/pandoc。
       - name: Cache fetched engines
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: resources/engines
           key: engines-${{ runner.os }}-${{ hashFiles('scripts/fetch-*.mjs') }}
