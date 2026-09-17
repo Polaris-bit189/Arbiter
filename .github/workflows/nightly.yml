@@ -1,0 +1,69 @@
+name: Nightly
+
+# 慢的那几套：真实 ffmpeg / sharp / 7z / pandoc 子进程、以及真起 Electron 打印 PDF。
+# 它们动辄几分钟，放在每个 PR 上会让人开始绕过 CI，所以排到夜里。
+#
+# ⚠️ **CI 覆盖不到的路径（如实说明，别当成通过）**：
+#   - LibreOffice 与 Calibre 的转换**没有任何 CI 覆盖**——它们要先下 357 MB / 213 MB 的 MSI
+#     再 `msiexec /a` 解包出 2.1 GiB，代价太大。这两条路径目前只有本地手工验证。
+#   - RAR 支持依赖 `resources/engines/7zip-full/`（2.4 MB），fetch 脚本会拉，所以 7z 这条是覆盖的。
+
+on:
+  schedule:
+    # 每天 18:00 UTC = 次日 02:00 北京时间
+    - cron: '0 18 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: nightly
+  cancel-in-progress: false
+
+jobs:
+  slow-suites:
+    name: Slow suites
+    runs-on: windows-latest
+    timeout-minutes: 90
+    env:
+      NPM_CONFIG_REGISTRY: https://registry.npmjs.org/
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Drop the China-only npm mirror
+        shell: bash
+        run: rm -f .npmrc
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Cache fetched engines
+        uses: actions/cache@v4
+        with:
+          path: resources/engines
+          key: engines-${{ runner.os }}-${{ hashFiles('scripts/fetch-*.mjs') }}
+
+      # 7-Zip 完整版（2.4 MB）：RAR 测试要用，缺了会退化成精简版而不报错
+      - name: Fetch bundled engines
+        run: node scripts/fetch-bundled-engines.mjs
+
+      # pandoc（221 MiB，从 wheel 里抽）
+      - name: Fetch pandoc
+        run: node scripts/fetch-pandoc.mjs
+
+      - name: Orchestration tests (real subprocesses)
+        run: npm run test:tasks
+
+      - name: Pandoc tests
+        run: npm run test:pandoc
+
+      - name: End-to-end PDF tests (real Electron)
+        run: npm run test:pdf
+
+      - name: Benchmark
+        run: npm run bench
+        continue-on-error: true # 基准是量收益用的，不是断言；慢机器上抖动不该判定失败

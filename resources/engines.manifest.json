@@ -1,0 +1,143 @@
+{
+  "_notes": [
+    "Arbiter 重型引擎清单。瘦包里不含这些二进制，用户首次用到时按此下载。",
+    "读取它的是 src/main/core/downlink.ts 的消费侧（loadManifest / engineDownloadPlan / downloadEngine）。",
+    "✅ sha256 已于 2026-09-13 用本机留存的安装包原件实测填入（见每条的 sha256Source）。",
+    "   其中 pandoc 那条在 PyPI 官方 JSON 里也给了同一个值，两侧独立吻合。",
+    "   改造清单时**不要**凭 URL 重新下载后回填哈希：这套下载设计的全部价值就建立在",
+    "   「哈希对不上就拒绝」上，回填一个没比对过的值等于把闸拆了。",
+    "⚠️ sizeBytes 来自本项目先前实测，可用于交叉校验；对不上说明文件换了。",
+    "   本次填哈希时三条的字节数均与原件逐条吻合，可交叉验证。",
+    "✅ 2026-09-13 逐条实测（GET + Range，带 Range: bytes=0-15）：五条镜像全部可达，",
+    "   服务端报出的总长度与各自的 sizeBytes 逐条吻合；pandoc 那份 40,891,661 字节整份下完，",
+    "   sha256 = 76fae066… 与清单一致。两个 MSI 未整份重下，改为「取三段窗口与已验过哈希的本机原件",
+    "   逐字节比对」——libreoffice 的 cn 窗口、calibre 的三个窗口全部 IDENTICAL。",
+    "⚠️ **清华 TUNA 对 User-Agent 挑食**（实测、可复现，交替探测排除了限流）：不带 UA → 403，",
+    "   浏览器 UA（Mozilla/5.0 … AppleWebKit，含 Electron 的默认 UA）→ 403，而 node / curl /",
+    "   Electron/33 这类 UA → 206。**Electron 的 net.request 默认就是浏览器 UA**，",
+    "   所以打包后必须先解决这点，否则 libreoffice 与 pandoc 的国内镜像一个都下不动。",
+    "   ✅ 已解决（2026-09-13，同日复测）：自定义 UA 也能过——当时用的是 `Arbiter/0.2.0 (+网址)`，",
+    "   在 pandoc 的 whl 与 libreoffice 的 MSI 两处均回 206，所以不必冒充 node/curl。",
+    "   ⚠️ downlink.ts 的 USER_AGENT 如今是 `Arbiter/<版本> (+https://github.com/Polaris-bit189/Arbiter)`，",
+    "   版本段由构建期 define 注入（`__ARBITER_VERSION__`，取 package.json 的 version）：",
+    "   构建产物里是真版本号，tsx / 无构建脚本里回落成 `Arbiter/dev`。形状与上面实测那一串相同，",
+    "   而镜像的判据是「像不像浏览器」而不是版本号——**但这一句是推断，不是实测**：",
+    "   0.3.x 把版本段改成注入之后，没有重新做过一次 403 复测。真被拦了就看多镜像回退的日志。",
+    "   每条请求都带（含续传那条）。",
+    "⚠️ download.documentfoundation.org 是 302 选镜像，不是文件源，region=intl 名不副实：",
+    "   实测无 UA 时转 mirrors.nju.edu.cn，浏览器 UA 时转清华 TUNA——落点随 UA 变。",
+    "mirrors 的顺序 = 尝试顺序，前一个失败自动换下一个（downlink.ts 已实现多镜像回退）。"
+  ],
+  "schemaVersion": 1,
+  "engines": [
+    {
+      "key": "libreoffice",
+      "label": "LibreOffice",
+      "version": "26.8.0",
+      "kind": "msi",
+      "sizeBytes": 374906880,
+      "sha256": "4aa6c6e1895f4055104effcb556bd3362d20c6ad707c149543304f395ef9db95",
+      "sha256Source": "本机留存的 LibreOffice_26.8.0_Win_x86-64.msi，字节数 374906880 与 sizeBytes 吻合",
+      "mirrors": [
+        {
+          "url": "https://mirrors.tuna.tsinghua.edu.cn/libreoffice/libreoffice/stable/26.8.0/win/x86_64/LibreOffice_26.8.0_Win_x86-64.msi",
+          "region": "cn",
+          "verified": true,
+          "note": "文件名是 Win_x86-64（下划线）。写成 Win-x86-64 是 404——本项目已实测踩过。⚠️ 该站对 User-Agent 挑食：不带 UA 或浏览器 UA 一律 403，必须显式设 UA（node/curl 那类）"
+        },
+        {
+          "url": "https://download.documentfoundation.org/libreoffice/stable/26.8.0/win/x86_64/LibreOffice_26.8.0_Win_x86-64.msi",
+          "region": "intl",
+          "verified": true,
+          "note": "2026-09-13 实测：302 选镜像，不是文件源。无 UA → mirrors.nju.edu.cn，浏览器 UA → 清华 TUNA，落点随 UA 变；它报的文件名与 sizeBytes 一致。要真正的国际源得另找，不能指望这一个"
+        }
+      ],
+      "extract": {
+        "method": "msiexec-a",
+        "targetDir": "libreoffice",
+        "note": "msiexec /a \"<pkg.msi>\" /qn TARGETDIR=\"<dir>\"（administrative install，免管理员）。**绝不能用 7z x**：它会丢掉 MSI 的 Directory 表，解出 100% 扁平的目录树，跑起来是 0xC0000135 STATUS_DLL_NOT_FOUND。见 docs/NOTES.md 约束 16"
+      },
+      "entry": "program/soffice.exe",
+      "versionProbe": {
+        "exe": "program/soffice.com",
+        "args": ["--version"],
+        "note": "必须用 .com 而不是 .exe：soffice.exe --version 退出码 0 但输出 0 字节。约束 16"
+      },
+      "covers": ["doc", "xls", "ppt", "odt", "ods", "odp"]
+    },
+    {
+      "key": "calibre",
+      "label": "Calibre",
+      "version": "9.14.0",
+      "kind": "msi",
+      "sizeBytes": 223559680,
+      "sha256": "4ccaf2a49a0069b5e78291ee7248dcd8967896d316d6432ddf657b6feae8f32d",
+      "sha256Source": "本机留存的 calibre-64bit-9.14.0.msi，字节数 223559680 与 sizeBytes 吻合",
+      "mirrors": [
+        {
+          "url": "https://download.calibre-ebook.com/9.14.0/calibre-64bit-9.14.0.msi",
+          "region": "intl",
+          "verified": true,
+          "note": "本项目实测直连可达。不存在 10.x——10.html 返回 200 但页面上没有任何 release 链接。2026-09-13 复核：三个窗口（头/中/尾各 256 KiB）与已验过哈希的本机原件逐字节 IDENTICAL，支持 Range（206），且对 UA 不挑"
+        }
+      ],
+      "extract": {
+        "method": "msiexec-a",
+        "targetDir": "calibre",
+        "note": "Calibre 的 portable installer 不是自解压包，载荷是 lzip（7z 打不开），**不要走那条路**，直接下 MSI"
+      },
+      "entry": "PFiles64/Calibre2/ebook-convert.exe",
+      "covers": ["epub", "mobi", "azw3", "azw", "fb2", "lit", "pdb"]
+    },
+    {
+      "key": "pandoc",
+      "label": "Pandoc",
+      "version": "3.9 (pypandoc-binary 1.17)",
+      "kind": "wheel",
+      "sizeBytes": 40891661,
+      "sha256": "76fae066cd2d7e78fb97f0ec8e9e36f437b07187b689b0b415ca18216f8f898a",
+      "sha256Source": "本机留存的 pypandoc.whl；与 PyPI 官方 JSON 的 digests.sha256 两侧独立吻合，字节数 40891661 与 sizeBytes 吻合",
+      "mirrors": [
+        {
+          "url": "https://pypi.tuna.tsinghua.edu.cn/packages/c6/b9/f47b77ba75ed5d47ec85fcc2ecfbf7f78e3a73347f3a09836634d930de98/pypandoc_binary-1.17-py3-none-win_amd64.whl",
+          "region": "cn",
+          "verified": true,
+          "note": "2026-09-13 实测：整份下完 40891661 字节，sha256=76fae066… 与清单一致（8.2 秒）。TUNA 沿用 PyPI 的 /packages/<hash-path>/ 布局。⚠️ 该站对 User-Agent 挑食：不带 UA 或浏览器 UA 一律 403，必须显式设 UA"
+        },
+        {
+          "url": "https://files.pythonhosted.org/packages/c6/b9/f47b77ba75ed5d47ec85fcc2ecfbf7f78e3a73347f3a09836634d930de98/pypandoc_binary-1.17-py3-none-win_amd64.whl",
+          "region": "intl",
+          "verified": true,
+          "note": "2026-09-13 实测：整份下完 40891661 字节，sha256=76fae066… 与清单一致（9.0 秒）。PyPI 官方 CDN，对 UA 不挑（不带 UA 也回 206）"
+        }
+      ],
+      "extract": {
+        "method": "zip-entry",
+        "entryInArchive": "pypandoc/files/pandoc.exe",
+        "targetDir": "pandoc",
+        "expectedEntrySizeBytes": 231717128,
+        "note": "wheel 是 zip，但**中央目录里记的压缩长度未必等于 local header 的**，取数据必须以 local header 的 name/extra 长度为准。见 docs/NOTES.md 约束 14。2026-09-13 复核：中央目录的 uncompressed size 与抽出来的 exe 都是 231717128，exe 的 sha256=ddf6bd05…（与官方 GitHub zip 里那个 3a3f5860… **大小相同、内容不同**——所以判据只能认哈希，sizeBytes 区分不了）"
+      },
+      "entry": "pandoc.exe",
+      "covers": ["md", "markdown", "txt", "rst", "html", "htm"],
+      "routes": [
+        ["md", "docx"],
+        ["markdown", "docx"],
+        ["txt", "docx"],
+        ["html", "docx"],
+        ["htm", "docx"],
+        ["rst", "docx"],
+        ["rst", "html"],
+        ["rst", "md"],
+        ["rst", "txt"],
+        ["rst", "pdf"]
+      ],
+      "optional": true,
+      "note": "221 MiB 的单文件自包含 exe。如果用户只转 txt/html/md 之间，pandoc 不是必需的。routes 是**该引擎的真相源**：这是全部 10 条真的会拉起 pandoc 子进程的转换（6 条 →docx 走 pandoc 引擎，rst 的另外 4 个出口落在 document 引擎里、内部仍调 pandoc）。`covers` 是它的源格式投影，供 UI 分组；**判据不能只看 covers**——html 在 covers 里，可 html→txt 是纯原生路径，认成「要下载 pandoc」会让这条转换在 pandoc 缺席时被误跳过"
+    }
+  ],
+  "_sha256HowTo": {
+    "windows": "certutil -hashfile \"<file>\" SHA256",
+    "node": "node -e \"const c=require('crypto'),f=require('fs');console.log(c.createHash('sha256').update(f.readFileSync(process.argv[1])).digest('hex'))\" <file>"
+  }
+}

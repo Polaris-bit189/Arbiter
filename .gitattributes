@@ -1,0 +1,21 @@
+# 统一行尾：仓库里存 LF，检出到工作区也是 LF。
+#
+# 为什么钉死而不是交给各人的 core.autocrlf：这个项目已经被混合行尾坑过一次——
+# 同一个文件里既有 CRLF 又有 LF（模板写进去的是 CRLF，后继工具写的是 LF），
+# 于是「按多行文本做锚点」的脚本一条都匹配不上，排查了半天才发现是行尾不一致。
+# 让它确定，别让它随机器变。
+* text=auto eol=lf
+
+# 明确标成二进制：别让 git 去做行尾「规范化」。
+# 它们本来就在 .gitignore 里（下载物），列出来是防以后有人改了主意。
+*.png  binary
+*.ico  binary
+*.icns binary
+*.exe  binary
+*.dll  binary
+*.heic binary
+*.rar  binary
+
+# npm 自己生成的文件不动它的字节，免得 npm 与 git 各行尾偏好打架、
+# 每次 install 都冒出一堆与依赖无关的 diff
+package-lock.json  -text

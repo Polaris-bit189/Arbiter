@@ -1,0 +1,19 @@
+# Issue 选择页的配置。
+#
+# blank_issues_enabled: false —— 关掉空白 issue。理由不是「逼用户填表」，
+# 而是上面两份表单里那两栏（引擎原始报错、用了哪个引擎）是**唯一**能让我开工的信息，
+# 空白 issue 几乎总是缺这两样，然后就是一轮「请贴上错误输出」的来回。
+# 如果表单确实套不下你的情况，用下面的入口，别硬塞。
+blank_issues_enabled: false
+
+contact_links:
+  - name: 安全漏洞
+    url: https://github.com/Polaris-bit189/Arbiter/security/advisories/new
+    about: 请**不要**用公开 issue 报安全问题，走私有渠道。见 SECURITY.md。
+
+  # 仓库的 Discussions 默认是关的。要在设置里打开之后再把下面这段注释解掉，
+  # 否则这个链接会 404 —— 一个坏掉的入口比没有入口更让人迷惑。
+  #
+  # - name: 提问 / 交流
+  #   url: https://github.com/Polaris-bit189/Arbiter/discussions
+  #   about: 用法问题、「这个格式能不能转」这类，请走 Discussions，不要开 issue。

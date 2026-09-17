@@ -1,0 +1,79 @@
+name: 功能请求
+description: 想加一个格式、换一种交互、或者别的
+title: '[Feature] '
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        两件事先说在前面，能省掉不少来回：
+
+        - **加一种格式的请求，最好带上「谁来做」**。这个项目不自己实现编解码，
+          它只负责调度外部引擎。所以「A 格式 → B 格式」这件事，得先有一个**能真的做到**的
+          现成引擎。你在下面的下拉里选一个，或者写你知道的那个。
+        - **矩阵里没列出来的组合，多半是实测过做不到**，不是忘了加。
+          比如 PDF → Word（LibreOffice Draw 的导入质量很差）、HEIC → BMP/ICO
+          （sharp 写不出来，而 HEIC 的像素又只能经 libheif 进 sharp）。
+          这类请求我通常会给一个「为什么不行」的回复，而不是默默关掉。
+
+  - type: dropdown
+    id: kind
+    attributes:
+      label: 这是哪一类请求
+      options:
+        - 加一个「源格式 → 目标格式」的组合
+        - 加一个全新的格式
+        - 界面 / 交互
+        - 性能
+        - AI 接入（MCP / 插件）
+        - 打包与安装
+        - 其他
+    validations:
+      required: true
+
+  - type: input
+    id: conversion
+    attributes:
+      label: 想要的转换（如果是格式请求）
+      description: 例：`flac → m4a`、`epub → azw3`。
+      placeholder: flac → m4a
+    validations:
+      required: false
+
+  - type: dropdown
+    id: engine
+    attributes:
+      label: 你觉得这件事该由哪个引擎来做
+      description: 选「我不知道」完全可以——但如果你知道，请直接说，这能省掉我一轮调研。
+      options:
+        - FFmpeg
+        - sharp
+        - libheif (WASM)
+        - 7-Zip
+        - LibreOffice
+        - Calibre
+        - pandoc
+        - Chromium printToPDF
+        - 需要引入一个新引擎
+        - 我不知道
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: 你实际遇到的是什么问题
+      description: >
+        请描述**场景**而不是**方案**。「我要把一百个 mkv 转成 mp4，一个个点太累了」
+        比「请加批量功能」有用得多——后者可能有一个更省事的解法。
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: 你现在是怎么绕过这个问题的
+      description: 这往往能说明需求的真实形状。
+    validations:
+      required: false
