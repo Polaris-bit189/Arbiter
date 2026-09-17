@@ -1,0 +1,17 @@
+{
+  // 给 scripts/ 下的测试做类型检查。
+  //
+  // 为什么需要单独一份：跑测试用的是 tsconfig.test.json，它把 `electron` 映射到了
+  // scripts/electron-stub.ts——桩只实现了主进程用到的一小部分 API，所以那份配置
+  // 一碰 ipc/ window/ 就会大面积报错，根本不具备全量检查能力。
+  // 而 `npm run typecheck` 用的 tsconfig.node.json 又没 include scripts/。
+  // 两头都不覆盖，结果是 tsx 只剥类型不做检查，脚本里的类型错误永远不会被发现。
+  //
+  // 这里刻意**不做** electron 的 paths 映射，用真正的 electron 类型来查。
+  "extends": "./tsconfig.node.json",
+  "compilerOptions": {
+    "composite": false,
+    "noEmit": true
+  },
+  "include": ["src/main/**/*", "src/cli/**/*", "src/shared/**/*", "scripts/**/*.ts"]
+}

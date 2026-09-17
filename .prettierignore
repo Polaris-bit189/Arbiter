@@ -1,0 +1,12 @@
+out
+dist
+pnpm-lock.yaml
+LICENSE.md
+tsconfig.json
+tsconfig.*.json
+
+# 与 eslint.config.mjs 里那条忽略同一个理由：resources/engines/ 是 msiexec /a 解出来的
+# 原始引擎目录树（LibreOffice 一万九千个文件 / Calibre 一千三百个），全是第三方 vendored
+# 代码。而 `npm run format` 是 `prettier --write .`——不排除就会走进去，Calibre 那批
+# 还是只读权限，写到一半直接报错中断。
+resources/engines

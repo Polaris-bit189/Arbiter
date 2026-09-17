@@ -1,0 +1,21 @@
+{
+  "name": "arbiter",
+  "version": "0.3.4",
+  "description": "Arbiter（调律者转换器）的 MCP 工具与斜杠命令：视频 / 音频 / 图片 / 文档 / 电子书 / 压缩包互转。插件本身不含引擎，它借用本机已安装的 Arbiter 应用。",
+  "author": {
+    "name": "Polaris"
+  },
+  "homepage": "https://github.com/Polaris-bit189/Arbiter#readme",
+  "repository": "https://github.com/Polaris-bit189/Arbiter",
+  "license": "MIT",
+  "keywords": [
+    "converter",
+    "ffmpeg",
+    "format-conversion",
+    "media",
+    "document",
+    "ebook",
+    "archive",
+    "mcp"
+  ]
+}

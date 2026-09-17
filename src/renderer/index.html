@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <title>调律者转换器</title>
+    <!--
+      CSP。**dev 与打包共用这一份**（渲染进程只有一个 index.html），所以这里写的是
+      「打包后也不能再宽」的那一档。
+
+      `connect-src` 只有 `'self'`：原来的 `ws: wss:` 是开发期 HMR 的遗留
+      （第三方审计 O3 —— 那两条不带域名限制，等于放行**任意** websocket 主机）。
+      删之前实测过（2026-09-15，Electron 39.8.10 / Chromium）：
+
+        1. `connect-src 'self'` **放行同源的 ws://**。受控实验：页面在 http://127.0.0.1:P
+           上连 ws://127.0.0.1:P，onopen 正常、服务端真收到 upgrade、无
+           securitypolicyviolation；对照组把 `ws: wss:` 写回去，结果一模一样。
+        2. dev 下 HMR 的 ws **就是同源**：起真实 dev server 读注入后的客户端常量，
+           socketHost 落回 `import.meta.url`（页面自己的 host/port），
+           兜底的 directSocketHost 也是 `localhost:<dev 端口>` —— 与页面同源。
+
+      两条合起来：`ws: wss:` 对 dev 也不是必需的，删掉无成本。
+      渲染进程本身不发任何网络请求（src/renderer 下 fetch / XMLHttpRequest / WebSocket
+      全为 0 处），connect-src 实际只有 dev 的 HMR 会用到。
+
+      ⚠️ 若将来把 dev server 挪到别的 host / port（覆写 server.hmr.host/port、远程容器），
+      HMR 的 ws 就不再同源了。那时把 `ws: wss:` 加回来，或按形态分（dev 宽 / 打包紧）。
+      表现很好认：Vite 会弹 "failed to connect to websocket" 覆盖层。
+
+      https://developer.mozilla.org/en-US/docs/Web/HTTP/CSP
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'"
+    />
+  </head>
+
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

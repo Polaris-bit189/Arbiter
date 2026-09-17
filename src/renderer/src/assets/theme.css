@@ -1,0 +1,306 @@
+/* ============================================================
+   此文件是设计交付物 `D:\ui\extracted\assets\design-tokens.css` 的副本。
+   设计师再丢一版设计 token 下来时：替换本文件，然后重做下面四处改动即可，
+   不需要人工逐行比对。**除这四处之外一律逐字保留，不要在这里手改颜色**——
+   `--c-*` 是颜色的唯一真相源，Tailwind 工具类只是它的桥接（见 main.css 的
+   `@theme inline`），方向不能反过来。
+
+   改动一（必要）：三个字体变量改名，加 `-src` 后缀。
+     --font-display → --font-display-src
+     --font-body    → --font-body-src
+     --font-mono    → --font-mono-src
+     原因：Tailwind v4 的字体命名空间同样是 `--font-*`，同名会互相覆盖
+     （main.css 里 `@theme inline` 的 `--font-*` 才是给工具类用的那一份）。
+     连带：本文件组件样式里的 4 处 `font-family: var(--font-body)` 同步改成
+     `var(--font-body-src)`（.btn-primary / .btn-secondary / .btn-ghost /
+     .select-dark）。漏改这几处不会报任何错，只是按钮悄悄退回继承字体。
+
+   改动二（必要）：三个变量的值把 Windows 常驻字体提到首位。
+     原设计里排在最前面的 Noto Serif SC / Noto Sans SC / JetBrains Mono
+     在这台 Windows 上通常没有安装，而 CJK 字体单字重上 10 MB，本工具不打包
+     字体，排前面只是每次白白落空一次字体查找。
+
+   改动三：本段注释。
+
+   改动四（必要）：从「通用工具类」那节起、一直到文件末尾，整体包进
+     `@layer components { … }`。**包裹语句本身是本文件唯一的结构性改动**，
+     被包住的规则一字未动、缩进也没动，为的是让下一版交付物的差分保持在两行。
+     原因：未分层（unlayered）的 CSS 在层叠中**压过所有分层 CSS**，而 Tailwind 的
+     utilities 恰恰是分层的 —— 于是 `.honeycomb { position: relative }` 会静默顶掉
+     `absolute`，`.btn-primary { background: … }` 会静默顶掉 `bg-panel`，
+     两者都不报任何错，只是布局/配色悄悄不是你写的那样。这已经真咬过一次
+     （侧栏页脚为了绕开 `.honeycomb` 的 `position` 而改用绝对定位的 span）。
+     包进 components 层后，这些类的优先级落在 utilities 之下，工具类能正常覆盖，
+     与写 Tailwind 的人的直觉一致；`.btn-*` 之类「只负责外观、外面叠加
+     margin/width/shrink」的用法也不再依赖源码顺序。
+     层序成立的前提：`tailwindcss/index.css` 首行已声明
+     `@layer theme, base, components, utilities;`，而 main.css 在它之后才 import 本文件。
+     ⚠️ 下一版交付物替换本文件时，**必须把这两行包裹补回来**，否则陷阱静默复活。
+
+   —— 与 `src/shared/theme.ts` 的对应关系 ——
+   那个文件导出的 `SHELL` 三色常量（主进程 / BrowserWindow 用，比如
+   `backgroundColor` 与标题栏底色）与这里的三个变量是一对，**改一处必须改另一处**：
+     SHELL.bgDeep ↔ --c-bg-deep   #060504
+     SHELL.bg     ↔ --c-bg        #0D0B08
+     SHELL.gold   ↔ --c-gold      #C9A227
+   ============================================================ */
+
+:root {
+  /* —— 底色（黑系，暖调） —— */
+  --c-bg-deep: #060504; /* 窗口外围 / 标题栏底 */
+  --c-bg: #0d0b08; /* 窗口主背景 */
+  --c-bg-panel: #14110c; /* 侧栏、面板 */
+  --c-bg-elevated: #1b1710; /* 卡片、下拉、悬浮层 */
+  --c-bg-hover: #221c12; /* 悬停态 */
+  --c-track: #221c12; /* 进度条轨道 */
+
+  /* —— 描边 —— */
+  --c-border: #2c2514;
+  --c-border-strong: #4a3c1c;
+
+  /* —— 金系 —— */
+  --c-gold: #c9a227; /* 主金 */
+  --c-gold-bright: #e8c96a; /* 亮金 */
+  --c-gold-pale: #f5e7b2; /* 淡金 */
+  --c-gold-dim: #8a7130; /* 暗金 */
+  --c-gold-deep: #6b5622; /* 深金 */
+
+  /* —— 文字 —— */
+  --c-text: #ede5ce;
+  --c-text-2: #a99c7b;
+  --c-text-3: #6f6448;
+
+  /* —— 状态 —— */
+  --c-success: #8fb573;
+  --c-error: #c97b5f;
+
+  /* —— 渐变 —— */
+  --grad-gold: linear-gradient(135deg, #8c6d1f 0%, #d9b64a 45%, #f5e7b2 100%);
+  --grad-gold-bar: linear-gradient(90deg, #8a7130 0%, #d9b64a 60%, #f0d488 100%);
+  --grad-hairline: linear-gradient(
+    90deg,
+    transparent,
+    #c9a227 30%,
+    #f5e7b2 50%,
+    #c9a227 70%,
+    transparent
+  );
+
+  /* —— 字体 —— */
+  --font-display-src: 'STZhongsong', 'STSong', 'SimSun', serif;
+  --font-body-src: 'Microsoft YaHei', 'PingFang SC', system-ui, sans-serif;
+  --font-mono-src: 'Cascadia Mono', Consolas, monospace;
+
+  /* —— 圆角 / 描边 —— */
+  --r-window: 10px;
+  --r-card: 6px;
+  --r-tile: 14px;
+
+  /* —— 金色蜂窝底纹（可平铺，调律者制服纹样） —— */
+  --pattern-honeycomb: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='13.86' height='24'%3E%3Cg fill='none' stroke='%238A7130' stroke-width='0.7'%3E%3Cpath d='M6.93-2 13.86 2v8l-6.93 4-6.93-4V2z'/%3E%3Cpath d='M0 10l6.93 4v8L0 26l-6.93-4v-8z'/%3E%3Cpath d='M13.86 10l6.93 4v8l-6.93 4-6.93-4v-8z'/%3E%3C/g%3E%3C/svg%3E");
+}
+
+/* ============================================================
+   通用工具类
+   ============================================================ */
+
+/* ↓ 改动四：包裹语句的起点，对应的 `}` 在文件末尾。见文件头注释。 */
+@layer components {
+  /* 金色渐变文字（用于大标题） */
+  .grad-gold-text {
+    background: var(--grad-gold);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+
+  /* 蜂窝底纹层（用 ::before 控制透明度，避免影响内容） */
+  .honeycomb,
+  .honeycomb::before {
+    position: relative;
+  }
+  .honeycomb::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background-image: var(--pattern-honeycomb);
+    pointer-events: none;
+  }
+
+  /* 标题栏下发丝线 */
+  .hairline {
+    height: 1px;
+    background: var(--grad-hairline);
+    opacity: 0.45;
+  }
+
+  /* ============================================================
+   组件基础样式
+   ============================================================ */
+
+  /* 主按钮 */
+  .btn-primary {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    height: 38px;
+    padding: 0 20px;
+    border: 1px solid rgba(245, 231, 178, 0.45);
+    border-radius: var(--r-card);
+    background: var(--grad-gold);
+    color: #1a1408;
+    font-family: var(--font-body-src);
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    box-shadow:
+      inset 0 1px 0 rgba(255, 240, 200, 0.35),
+      0 2px 10px rgba(201, 162, 39, 0.22);
+    transition:
+      filter 0.18s,
+      box-shadow 0.18s;
+  }
+  .btn-primary:hover {
+    filter: brightness(1.08);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 240, 200, 0.4),
+      0 2px 16px rgba(201, 162, 39, 0.38);
+  }
+  .btn-primary:active {
+    filter: brightness(0.94);
+  }
+  .btn-primary:disabled {
+    background: #2c2514;
+    border-color: #3a3017;
+    color: var(--c-text-3);
+    box-shadow: none;
+    cursor: not-allowed;
+  }
+
+  /* 次按钮 */
+  .btn-secondary {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    height: 38px;
+    padding: 0 16px;
+    border: 1px solid var(--c-border-strong);
+    border-radius: var(--r-card);
+    background: transparent;
+    color: var(--c-gold);
+    font-family: var(--font-body-src);
+    font-size: 13px;
+    cursor: pointer;
+    transition:
+      background 0.18s,
+      border-color 0.18s,
+      color 0.18s;
+  }
+  .btn-secondary:hover {
+    background: var(--c-bg-elevated);
+    border-color: var(--c-gold-dim);
+    color: var(--c-gold-bright);
+  }
+
+  /* 幽灵按钮 */
+  .btn-ghost {
+    display: inline-flex;
+    align-items: center;
+    height: 38px;
+    padding: 0 12px;
+    border: none;
+    background: transparent;
+    color: var(--c-text-2);
+    font-family: var(--font-body-src);
+    font-size: 13px;
+    cursor: pointer;
+    transition:
+      color 0.18s,
+      background 0.18s;
+  }
+  .btn-ghost:hover {
+    color: var(--c-gold-pale);
+    background: var(--c-bg-panel);
+  }
+
+  /* 深色下拉 */
+  .select-dark {
+    height: 32px;
+    padding: 0 28px 0 10px;
+    border: 1px solid var(--c-border-strong);
+    border-radius: var(--r-card);
+    background: var(--c-bg-elevated)
+      url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8'%3E%3Cpath d='M2 2l4 4 4-4' fill='none' stroke='%23C9A227' stroke-width='1.5' stroke-linecap='round'/%3E%3C/svg%3E")
+      no-repeat right 10px center;
+    color: var(--c-text);
+    font-family: var(--font-body-src);
+    font-size: 12px;
+    appearance: none;
+    -webkit-appearance: none;
+    cursor: pointer;
+    transition: border-color 0.18s;
+  }
+  .select-dark:hover {
+    border-color: var(--c-gold-dim);
+  }
+  .select-dark:focus {
+    border-color: var(--c-gold);
+    outline: none;
+  }
+  .select-dark option {
+    background: var(--c-bg-elevated);
+    color: var(--c-text);
+  }
+
+  /* 进度条 */
+  .pbar {
+    height: 3px;
+    border-radius: 2px;
+    background: var(--c-track);
+    overflow: hidden;
+  }
+  .pbar > i {
+    display: block;
+    height: 100%;
+    border-radius: 2px;
+    background: var(--grad-gold-bar);
+    box-shadow: 0 0 6px rgba(217, 182, 74, 0.5);
+    transition: width 0.12s linear;
+  }
+
+  /* 状态徽章 */
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    white-space: nowrap;
+  }
+  .badge.waiting {
+    color: var(--c-text-2);
+  }
+  .badge.converting {
+    color: var(--c-gold-bright);
+  }
+  .badge.done {
+    color: var(--c-success);
+  }
+  .badge.error {
+    color: var(--c-error);
+  }
+
+  /* 深色滚动条 */
+  .scroll-dark::-webkit-scrollbar {
+    width: 10px;
+  }
+  .scroll-dark::-webkit-scrollbar-thumb {
+    background: var(--c-border);
+    border-radius: 5px;
+  }
+  .scroll-dark::-webkit-scrollbar-thumb:hover {
+    background: var(--c-border-strong);
+  }
+  .scroll-dark::-webkit-scrollbar-track {
+    background: transparent;
+  }
+} /* @layer components —— 改动四的终点，起点在「通用工具类」那节标题下 */
