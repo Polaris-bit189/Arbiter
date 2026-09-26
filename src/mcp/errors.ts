@@ -34,6 +34,8 @@
  * 见 `server.ts` 的 `jobFailure`。
  */
 
+import { tKey, type KeysOf } from '@shared/i18n'
+
 /**
  * 错误码全集。**闭集**，且每一个都有真实的抛出点（见 `POLICIES` 的逐条说明）。
  *
@@ -83,7 +85,12 @@ export type ErrorCode =
   /** 我们自己的内部不一致 / 意料之外的异常。**这是唯一「可能重试成功」的兜底**。 */
   | 'internal'
 
-/** 一个码对应的默认策略。单个错误可以在抛出时覆盖其中任何一项。 */
+/**
+ * 一个码对应的默认策略。单个错误可以在抛出时覆盖其中任何一项。
+ *
+ * ⚠️ 这是**译好之后**的形状：`next_steps` 是成品句子（给 agent 读的）。表里存的是
+ * **键**，取词在 `policyFor()` 里发生——见下面 `POLICIES` 的说明。
+ */
 export interface ErrorPolicy {
   /** 同样的参数再调一次有没有可能不同结果。见文件头。 */
   retryable: boolean
@@ -102,48 +109,65 @@ export interface ErrorPolicy {
  *   - `path_not_allowed` / `source_missing` 是 `false`——要改参数，不是等一等。
  *   - `canceled` 是 `true`——取消是外部动作，重新提交一次同一个转换就是能做。
  */
-const POLICIES: Record<ErrorCode, ErrorPolicy> = {
+/**
+ * 码 → 默认策略。**这里是唯一的来源**：抛出点只给码，策略从这里取，
+ * 免得同一种失败在十一处各写一句略有出入的 next_steps。
+ *
+ * ⚠️ **`next_steps` 存的是键，不是句子。** 这张表在 import 那一刻就求值，写 `t(…)`
+ * 会让它永远停在启动时那门语言上——一条跑了很久的会话中途切语言，agent 拿到的
+ * 还是旧那一门（与 `engines/status.ts` 的 `LABELS`、渲染层那些 `*_LABEL` 常量
+ * 是同一个坑，见 `docs/NOTES.md` 约束 43）。取词只发生在 `policyFor()` 里，也就是
+ * **每次调用时**按当前语言译一遍。
+ *
+ * `retryable` 的判据只有一句：**「同样的调用再来一次会不会有不同的结果」**。
+ * 不是「严不严重」、也不是「能不能修好」：
+ *   - `engine_missing` 是 `false`——用户装好引擎之前，重试一万次还是同一句拒绝。
+ *     它当然**能**修好，但要用户去界面里点一下，那不是 agent 重试能等到的。
+ *   - `path_not_allowed` / `source_missing` 是 `false`——要改参数，不是等一等。
+ *   - `canceled` 是 `true`——取消是外部动作，重新提交一次同一个转换就是能做。
+ */
+const POLICIES: Record<
+  ErrorCode,
+  { retryable: boolean; next_steps: readonly KeysOf<'mcp.errors.'>[] }
+> = {
   unknown_format: {
     retryable: false,
-    next_steps: [
-      '先确认源文件的扩展名在能力矩阵里：调 list_supported_formats（或读 converter://formats）',
-      '路径必须带真实扩展名，别拿 .part / .tmp 这类中间文件去转'
-    ]
+    next_steps: ['mcp.errors.unknown_format.confirmExt', 'mcp.errors.unknown_format.realExt']
   },
   target_not_supported: {
     retryable: false,
     next_steps: [
-      '从返回值 hint.targets 里挑一个目标格式改调一次',
-      '矩阵里没有的组合多半是实测过做不到，别用同一个目标重复试'
+      'mcp.errors.target_not_supported.pickFromHint',
+      'mcp.errors.target_not_supported.skipKnownImpossible'
     ]
   },
   engine_missing: {
     retryable: false,
     next_steps: [
-      '这条转换需要额外引擎，得请用户先在 Arbiter（调律者转换器）里下载它',
-      '在那之前改用不需要该引擎的目标格式（hint 里有具体是哪个引擎）'
+      'mcp.errors.engine_missing.askUserToDownload',
+      'mcp.errors.engine_missing.useOtherTarget'
     ]
   },
   path_not_allowed: {
     retryable: false,
     next_steps: [
-      '把路径改到 hint.roots 列出的目录里',
-      '输出路径必须写成绝对路径，且它的**上级目录要已经存在**'
+      'mcp.errors.path_not_allowed.useAllowedRoot',
+      'mcp.errors.path_not_allowed.absoluteOutput'
     ]
   },
   source_missing: {
     retryable: false,
     next_steps: [
-      '核对路径拼写；以工具的返回值/hint 里的路径为准，不要自己拼',
-      '确认这个文件确实还在（可能刚被移动或改名了）'
+      'mcp.errors.source_missing.checkSpelling',
+      'mcp.errors.source_missing.confirmStillThere'
     ]
   },
   source_corrupt: {
     retryable: false,
     next_steps: [
-      '读这次返回里的 log_tail —— 引擎的原始报错在那里，它才说得清是哪一步不对',
-      '用 inspect_file 看看这个源还能不能被识别',
-      '同一个源 + 同一个目标重试不会有不同结果，要换就换源或换目标格式'
+      'mcp.errors.source_corrupt.readLogTail',
+      'mcp.errors.source_corrupt.inspectSource',
+      'mcp.errors.source_corrupt.noRetrySameTarget'
     ]
   },
   output_conflict: {
@@ -152,49 +176,55 @@ const POLICIES: Record<ErrorCode, ErrorPolicy> = {
       // 这条码有**两个真实变体**（`jobs.ts` 的 `resolveOutput`）：指向目录、以及指向一个
       // 已经存在的文件。第一句必须同时说中两个，否则按它去做会把 agent 引到错的方向上
       // ——「指向文件名、不是目录」对第二个变体是一句**已经做到了**的话。
-      'output_path 要写成产物的完整路径（含文件名），而且那上面**当前不能有东西**',
-      '换一个没被占用的路径；hint 里有冲突的那个路径'
+      'mcp.errors.output_conflict.fullFilePath',
+      'mcp.errors.output_conflict.useFreePath'
     ]
   },
   canceled: {
     retryable: true,
-    next_steps: ['任务是**被取消**的，不是失败；需要的话重新提交一次同样的转换']
+    next_steps: ['mcp.errors.canceled.resubmit']
   },
   unknown_job: {
     retryable: false,
-    next_steps: [
-      '用 list_jobs 拿一份当前登记的 job_id 清单（hint 里也带了一份）',
-      'job_id 只在**当前这次 MCP 会话**里有效，换一个会话就是全新的登记表'
-    ]
+    next_steps: ['mcp.errors.unknown_job.listJobs', 'mcp.errors.unknown_job.sessionScoped']
   },
   no_text_content: {
     retryable: false,
     next_steps: [
-      '这份文档没有文本层（图片型 / 扫描件 PDF），本项目不含 OCR，**重试这个文件不会有不同结果**',
-      '要看内容就用 convert_file 把它转成 png / jpg（一页一张图），交给能看图的客户端',
-      '要拿到文字得先由用户对这份文件做一次 OCR'
+      'mcp.errors.no_text_content.noTextLayer',
+      'mcp.errors.no_text_content.convertToImage',
+      'mcp.errors.no_text_content.needsOcr'
     ]
   },
   not_readable: {
     retryable: false,
     next_steps: [
-      'read_document 只读文档正文：docx / xlsx / pdf / md / txt / html / rst / csv',
-      '音视频 / 图片 / 压缩包的信息用 inspect_file 查；要换格式用 convert_file',
-      '需要重型引擎的类别（doc/xls/ppt/odt/ods 与电子书）改用 convert_file，并把要下载多大的引擎一并告诉用户'
+      'mcp.errors.not_readable.supportedBodies',
+      'mcp.errors.not_readable.useInspectOrConvert',
+      'mcp.errors.not_readable.heavyEngines'
     ]
   },
   internal: {
     retryable: true,
-    next_steps: ['先原样重试一次', '连续两次同样失败就把这条错误的原文报给用户，不要自己反复重试']
+    next_steps: ['mcp.errors.internal.retryOnce', 'mcp.errors.internal.reportToUser']
   }
 }
 
 /** 码表本身，供测试与文档出口按集合断言（派生的，不另写一份字面量）。 */
 export const ERROR_CODES = Object.keys(POLICIES) as ErrorCode[]
 
-/** 取一个码的默认策略。码是闭集，所以这里不可能取不到。 */
+/**
+ * 取一个码的默认策略。码是闭集，所以这里不可能取不到。
+ *
+ * **取词发生在这里**（每次调用时按当前语言译一遍）——`POLICIES` 里存的是键，
+ * 理由见它上面那段。返回的是一个新对象：调用方改了它不会污染码表。
+ */
 export function policyFor(code: ErrorCode): ErrorPolicy {
-  return POLICIES[code]
+  const policy = POLICIES[code]
+  return {
+    retryable: policy.retryable,
+    next_steps: policy.next_steps.map((key) => tKey(key))
+  }
 }
 
 /** 抛出时可覆盖的东西。三项都可选：不给就取 `POLICIES` 里那份。 */
@@ -265,7 +295,7 @@ export interface FailureFields {
 export function failureOf(error: unknown): FailureFields {
   const known = error instanceof McpToolError ? error : null
   const code: ErrorCode = known?.code ?? 'internal'
-  const policy = POLICIES[code]
+  const policy = policyFor(code)
   return {
     code,
     retryable: known?.retryable ?? policy.retryable,

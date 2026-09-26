@@ -1,3 +1,5 @@
+import { t } from '@shared/i18n'
+
 /**
  * CLI 的 stdout / stderr 纪律，以及退出码。
  *
@@ -97,7 +99,7 @@ export function protectStdout(): void {
     cb?: (error?: Error | null) => void
   ): boolean => {
     const text = typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8')
-    log(`[arbiter] 拦下一段本会污染 stdout 的写入（stdout 是数据通道）：${text.trimEnd()}`)
+    log(t('cli.stdout.blocked', { text: text.trimEnd() }))
     // 拦下之后本没有真实写入发生，但调用方可能在等这个回调（流式写入就是这样）。
     // 不回它就永远悬着。
     const callback = typeof encodingOrCb === 'function' ? encodingOrCb : cb

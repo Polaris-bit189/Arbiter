@@ -4,6 +4,7 @@ import { dirname, join } from 'path'
 import mammoth from 'mammoth'
 import sharp from 'sharp'
 import { categoryOf } from '@shared/formats'
+import { stagePair } from '@shared/i18n/stage'
 import { baseNameOf, partPathOf } from '../core/outputName'
 import type { CancelToken } from '../core/cancel'
 import { decodeHeif } from './heic'
@@ -329,7 +330,7 @@ export async function runDocument(context: ConvertContext): Promise<void> {
 
   try {
     if (toExt === 'pdf') {
-      onProgress({ kind: 'indeterminate', stage: '排版中…' })
+      onProgress({ kind: 'indeterminate', ...stagePair({ key: 'stage.document.layout' }) })
 
       const plan =
         categoryOf(fromExt) === 'image'
@@ -345,7 +346,7 @@ export async function runDocument(context: ConvertContext): Promise<void> {
       // 取消会在界面上显示成「转换失败」。这个模块认得 `ConversionCanceled`，那一层不认得。
       if (isCanceled()) throw new ConversionCanceled()
 
-      onProgress({ kind: 'indeterminate', stage: '生成 PDF…' })
+      onProgress({ kind: 'indeterminate', ...stagePair({ key: 'stage.document.renderPdf' }) })
 
       const tempPath = partPathOf(output)
       // HTML 必须先落成真实文件：renderHtmlFileToPdf 走的是 loadFile，
@@ -380,7 +381,7 @@ export async function runDocument(context: ConvertContext): Promise<void> {
       return
     }
 
-    onProgress({ kind: 'indeterminate', stage: '解析文档…' })
+    onProgress({ kind: 'indeterminate', ...stagePair({ key: 'stage.document.parse' }) })
 
     // 这几条有直通车，不必绕 HTML 一圈，绕了反而会丢信息
     // （mammoth 的 extractRawText 比「转 HTML 再剥标签」干净得多）
@@ -391,7 +392,7 @@ export async function runDocument(context: ConvertContext): Promise<void> {
       return await writeText(output, raw.value, isCanceled)
     }
     if (fromExt === 'pdf' && (toExt === 'txt' || toExt === 'md')) {
-      onProgress({ kind: 'indeterminate', stage: '提取文本…' })
+      onProgress({ kind: 'indeterminate', ...stagePair({ key: 'stage.document.extractText' }) })
       const pages = await extractPdfLines(input, cancel)
       // 一个字都没抽到时**必须报错，不能写出一个空文件**：空文件与「转换成功」在
       // 调用方眼里完全同形（扫描件那条路，见 `textlessReason`）。
@@ -421,7 +422,7 @@ export async function runDocument(context: ConvertContext): Promise<void> {
       return await writeText(output, html, isCanceled)
     }
 
-    onProgress({ kind: 'indeterminate', stage: '转换中…' })
+    onProgress({ kind: 'indeterminate', ...stagePair({ key: 'stage.converting' }) })
 
     if (toExt === 'md') {
       return await writeText(output, htmlToMarkdown(fragment), isCanceled)

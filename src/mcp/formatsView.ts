@@ -20,27 +20,30 @@ import {
   targetsFor,
   targetsForCategory
 } from '@shared/formats'
+// 用户可见文案一律走字典（P6）。这一片是 `mcp.formats.*`，见 `@shared/i18n/parts/mcpJobs.ts`。
+import { t } from '@shared/i18n'
+// 类别的六个名字**不再在这里各写一份**：键表住在 `@shared/i18n/keys.ts`，
+// 渲染层与主进程读的是同一份（原先三份副本会漂成三个名字而不报错）。
+import { CATEGORY_LABEL } from '@shared/i18n/keys'
 import { CATEGORIES, type Category, type EngineKey } from '@shared/types'
 
 /** `converter://formats` 这个 resource 的 URI。放这里是为了与 `formatsMarkdown()` 挨着。 */
 export const FORMATS_RESOURCE_URI = 'converter://formats'
 
 /**
- * 类别 → 中文名。
+ * 类别 → 字典**键**（不是成品句子）。
  *
- * ⚠️ **这是仓库里的第三份**（另两份在 `src/main/ipc/tasks.ts` 与 `src/renderer/src/lib/labels.ts`），
- * 复用不了：`src/mcp/` 只许依赖 zod 与 `@shared/*`，而两份都在 `@shared` 之外。
- * **应该有人把它提到 `@shared/types.ts` 里去**，三份各自维护迟早出事。
- * 在没提之前，测试里锁了一条「六个类别一个不少」，至少让漏一行变成红而不是静默少一段表。
+ * P6 之前这是仓库里的**第三份**「类别名」（另两份在 `src/main/ipc/tasks.ts` 与渲染层的
+ * `lib/labels.ts`），三份各自维护的表现是：同一个类别在界面、在系统文件对话框、在 agent
+ * 的返回值里叫三个名字，而没有任何地方会报错。现在它**收敛到 `@shared/i18n/keys.ts`
+ * 的那一份**（`CATEGORY_LABEL`）——那一份是 `src/shared` 里唯一能被三方同时 import 的落点。
+ *
+ * ⚠️ **值现在是键，不是可以直接显示的字符串**：取值处必须过 `t()`
+ * （见 `listSupportedFormats()` 里那句 `label: t(CATEGORY_LABELS[cat])`）。
+ * 直接把键当句子用的表现是 agent 收到一串 `category.video`——而类型照样是 `string`，
+ * 编译、lint 都不会响。
  */
-export const CATEGORY_LABELS: Record<Category, string> = {
-  video: '视频',
-  audio: '音频',
-  image: '图片',
-  document: '文档',
-  ebook: '电子书',
-  archive: '压缩包'
-}
+export const CATEGORY_LABELS = CATEGORY_LABEL
 
 /** 一个源格式的对外视图。 */
 export interface SourceFormatView {
@@ -77,14 +80,19 @@ export function listSupportedFormats(category?: Category): CategoryFormatView[] 
   // 传进来的可能是 agent 拼的字符串（zod 那侧已经限过一次，这里是第二道闸）。
   // **不静默返回空数组**：那会让调用方以为「这个类别没有格式」，而不是「你写错了类别名」。
   if (category !== undefined && !CATEGORIES.includes(category)) {
-    throw new Error(`未知类别 ${String(category)}；可用的是：${CATEGORIES.join(' / ')}`)
+    throw new Error(
+      t('mcp.formats.unknownCategory', {
+        category: String(category),
+        list: CATEGORIES.join(' / ')
+      })
+    )
   }
   const wanted: readonly Category[] = category === undefined ? CATEGORIES : [category]
   const sources = sourceExtsByCategory()
 
   return wanted.map((cat) => ({
     category: cat,
-    label: CATEGORY_LABELS[cat],
+    label: t(CATEGORY_LABELS[cat]),
     targets: targetsForCategory(cat),
     sources: sources[cat].map((ext) => {
       const targets = targetsFor(ext)
@@ -100,7 +108,7 @@ export function listSupportedFormats(category?: Category): CategoryFormatView[] 
 
 /** 把一串格式名写成 markdown 里的形式：`` `mp4`、`mkv` ``。空列表给 `—`。 */
 function inlineFormats(list: string[]): string {
-  return list.length > 0 ? list.map((item) => `\`${item}\``).join('、') : '—'
+  return list.length > 0 ? list.map((item) => `\`${item}\``).join(t('mcp.formats.itemSep')) : '—'
 }
 
 /**
@@ -120,7 +128,7 @@ function downloadCell(downloadFor: Record<string, EngineKey>): string {
   if (byEngine.size === 0) return '—'
   return [...byEngine.entries()]
     .map(([engine, targets]) => `${inlineFormats(targets)} → \`${engine}\``)
-    .join('；')
+    .join(t('mcp.formats.groupSep'))
 }
 
 /**
@@ -135,25 +143,25 @@ function downloadCell(downloadFor: Record<string, EngineKey>): string {
  */
 export function formatsMarkdown(): string {
   const lines: string[] = [
-    '# Arbiter 能力矩阵：源格式 → 目标格式',
+    t('mcp.formats.mdTitle'),
     '',
-    '> 本表由 `src/shared/formats.ts` **派生**，不要手改——矩阵改了这张表就跟着变，',
-    '> 对不上时 `scripts/test-mcp-view.ts` 会翻红。',
+    t('mcp.formats.mdDerivedHead'),
+    t('mcp.formats.mdDerivedTail'),
     '',
-    '读法：',
+    t('mcp.formats.mdHowToRead'),
     '',
-    '- 格式一律是小写、不带点的扩展名，源与目标都是这个口径（不要写成 .mp4 或 MP4）。',
-    '- 「要下载的出口」列写成 `docx` → `pandoc` 这种形式，意思是**只有这几个出口**要先装好该引擎；',
-    '  没装时这些任务会失败或一直排队等下载。没列出来的出口不需要额外下载。',
-    '- `—` 表示没有内容（该源没有合法出口，或该出口不需要额外下载），不要拿它去拼 target_format。',
-    '- 同一类别内不同源格式的出口可以不一样，所以「某类别能转成 X」不等于该类别下每个源都能转成 X。',
+    t('mcp.formats.mdBullet1'),
+    t('mcp.formats.mdBullet2Head'),
+    t('mcp.formats.mdBullet2Tail'),
+    t('mcp.formats.mdBullet3'),
+    t('mcp.formats.mdBullet4'),
     ''
   ]
 
   for (const view of listSupportedFormats()) {
     lines.push(`## ${view.category} — ${view.label}`, '')
-    lines.push(`目标格式并集：${inlineFormats(view.targets)}`, '')
-    lines.push('| 源格式 | 可转为 | 要下载的出口 |', '| --- | --- | --- |')
+    lines.push(t('mcp.formats.mdUnion', { list: inlineFormats(view.targets) }), '')
+    lines.push(t('mcp.formats.mdTableHeader'), '| --- | --- | --- |')
     for (const source of view.sources) {
       lines.push(
         `| \`${source.ext}\` | ${inlineFormats(source.targets)} | ${downloadCell(source.downloadFor)} |`

@@ -1,3 +1,4 @@
+import { t } from '@shared/i18n'
 import { spriteIdFor } from '../lib/icons'
 import { useTasks } from '../store/useTasks'
 import { TaskCard } from './TaskCard'
@@ -56,10 +57,10 @@ function EmptyQueue(): React.JSX.Element {
 
       <div className="relative px-6 text-center">
         <p className="font-display text-[15px] tracking-[0.2em] text-gold-dim">
-          此处尚空，静候文件入列
+          {t('workbench.emptyTitle')}
         </p>
         <p className="mt-2 text-[11px] tracking-[0.5px] text-fg-faint">
-          拖入文件，或点上方「收入文件」
+          {t('workbench.emptyHint')}
         </p>
       </div>
     </div>

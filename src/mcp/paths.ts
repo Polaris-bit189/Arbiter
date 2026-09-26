@@ -1,5 +1,6 @@
 import { realpathSync, statSync } from 'fs'
 import { isAbsolute, resolve } from 'path'
+import { t } from '@shared/i18n'
 import { isInsideDir } from '../main/core/outputName'
 import { PathNotAllowed } from './errors'
 
@@ -90,17 +91,18 @@ export function createPathGate(opts: {
   const writeRoots = writeEnv.length > 0 ? normalizeRoots(writeEnv).roots : roots
 
   if (roots.length === 0) {
-    throw new PathNotAllowed(
-      '一个可用的根目录都没有，MCP 不会放行任何路径。请用 ARBITER_MCP_ROOTS 指定。',
-      { tried: readCandidates, dropped }
-    )
+    throw new PathNotAllowed(t('mcp.paths.noRoots'), {
+      tried: readCandidates,
+      dropped
+    })
   }
   return { roots, writeRoots }
 }
 
 /** 给 agent 看的一句话：当前放行哪些根。工具报错时带上它，agent 才知道该往哪放文件。 */
 export function describeRoots(gate: PathGate): string {
-  return `允许的目录：${gate.roots.join('、')}`
+  // 分隔符也走字典：中文用顿号、英文用 `', '`（直接 `join('、')` 会让英文用户看到顿号）。
+  return t('mcp.paths.allowedRoots', { roots: gate.roots.join(t('mcp.paths.rootsSeparator')) })
 }
 
 /**
@@ -154,17 +156,22 @@ export function resolveReadPath(gate: PathGate, input: string, cwd: string): str
     real = realish(input, cwd)
   } catch {
     throw new PathNotAllowed(
-      `路径不存在（或所在目录不存在）：${absolute}`,
+      t('mcp.paths.notFound', { path: absolute }),
       { roots: gate.roots },
-      { code: 'source_missing' }
+      {
+        code: 'source_missing'
+      }
     )
   }
 
   // 先判「在不在根里」再 stat：越界的路径不该泄露「它存在不存在」这个信息。
   if (!insideAny(real, gate.roots)) {
-    throw new PathNotAllowed(`路径不在允许的目录里：${absolute}。${describeRoots(gate)}`, {
-      roots: gate.roots
-    })
+    throw new PathNotAllowed(
+      t('mcp.paths.notAllowed', { path: absolute, roots: describeRoots(gate) }),
+      {
+        roots: gate.roots
+      }
+    )
   }
 
   let stat
@@ -172,13 +179,15 @@ export function resolveReadPath(gate: PathGate, input: string, cwd: string): str
     stat = statSync(real)
   } catch {
     throw new PathNotAllowed(
-      `路径读不到：${absolute}`,
+      t('mcp.paths.unreadable', { path: absolute }),
       { roots: gate.roots },
-      { code: 'source_missing' }
+      {
+        code: 'source_missing'
+      }
     )
   }
   if (stat.isDirectory()) {
-    throw new PathNotAllowed(`这是一个目录，不是文件：${absolute}`, undefined, {
+    throw new PathNotAllowed(t('mcp.paths.isDirectory', { path: absolute }), undefined, {
       code: 'source_missing'
     })
   }
@@ -195,16 +204,19 @@ export function resolveWritePath(gate: PathGate, input: string, cwd: string): st
   try {
     real = realish(input, cwd)
   } catch {
-    throw new PathNotAllowed(`输出路径的上级目录不存在：${absolute}`, {
+    throw new PathNotAllowed(t('mcp.paths.parentMissing', { path: absolute }), {
       roots: gate.writeRoots,
-      hint: '先建好目录，或把产物写到已有的目录里'
+      hint: t('mcp.paths.parentMissingHint')
     })
   }
 
   if (!insideAny(real, gate.writeRoots)) {
-    throw new PathNotAllowed(`输出路径不在允许的目录里：${absolute}。${describeRoots(gate)}`, {
-      roots: gate.writeRoots
-    })
+    throw new PathNotAllowed(
+      t('mcp.paths.writeNotAllowed', { path: absolute, roots: describeRoots(gate) }),
+      {
+        roots: gate.writeRoots
+      }
+    )
   }
   return real
 }

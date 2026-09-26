@@ -311,6 +311,15 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md).
       silently shifting the cut
 - [x] Per-task options: a trim range, a target size or bitrate, and an ordered
       filter chain (deinterlace, denoise, sharpen, rotate, scale, loudness)
+- [x] Quality and speed controls for video encoding, in the shape HandBrake
+      uses: a constant-quality value (CRF), an encoder preset, and a tune.
+      Measured rather than guessed — at a fixed CRF a slower preset does *not*
+      mean a smaller file, and the slow ones cost up to 2.3× the memory, so the
+      concurrency budget accounts for it
+- [x] Encrypted music containers (`.ncm`, `.qmc*`, `.mflac`, `.mgg`, `.kwm`,
+      `.xm`). The container is unpacked and the audio inside is handled like any other
+      source — transcoded only when the target differs from what the file already
+      holds
 - [x] MCP server and Claude Code plugin
 - [x] Folder recursion, previews that write nothing, and output verification
 
@@ -329,10 +338,6 @@ No dates, and the order below is a guess rather than a promise.
 - [ ] Crop, rotate, and automatic black-bar removal
 - [ ] HDR → SDR tone mapping, and 10-bit / 4:4:4 intermediates for second-pass
       work
-- [ ] Quality and speed controls for video encoding, in the shape HandBrake
-      uses: a constant-quality value, an encoder preset, and a tune. Today all
-      three are fixed (`-crf 23`, `-preset veryfast`); only a size or bitrate
-      target is exposed
 - [ ] Stabilisation
 
 **On-device AI.** Every engine in this group runs on your machine: nothing is

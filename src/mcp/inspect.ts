@@ -10,6 +10,7 @@ import {
   requiresDownload,
   targetsFor
 } from '@shared/formats'
+import { t } from '@shared/i18n'
 import type { Category, EngineKey } from '@shared/types'
 import { killTree } from '../main/core/kill'
 import { parseProbeOutput } from '../main/core/probe'
@@ -320,23 +321,26 @@ async function scoutMedia(path: string): Promise<Scout> {
   try {
     exe = ffmpegPath()
   } catch (error) {
-    return { probe: null, note: `找不到 ffmpeg，读不出流信息：${describeError(error)}` }
+    return { probe: null, note: t('mcp.inspect.mediaNoFfmpeg', { reason: describeError(error) }) }
   }
 
   let result: RunResult
   try {
     result = await run(exe, buildProbeArgs(path), PROBE_TIMEOUT_MS)
   } catch (error) {
-    return { probe: null, note: `ffmpeg 侦察失败：${describeError(error)}` }
+    return {
+      probe: null,
+      note: t('mcp.inspect.mediaScoutFailed', { reason: describeError(error) })
+    }
   }
 
   if (result.spawnError) {
-    return { probe: null, note: `无法启动 ffmpeg：${result.spawnError}` }
+    return { probe: null, note: t('mcp.inspect.mediaSpawnFailed', { reason: result.spawnError }) }
   }
   if (result.timedOut) {
     return {
       probe: null,
-      note: `ffmpeg 超过 ${PROBE_TIMEOUT_MS / 1000} 秒没有返回，已杀掉进程树；文件所在磁盘可能很慢`
+      note: t('mcp.inspect.mediaTimeout', { seconds: PROBE_TIMEOUT_MS / 1000 })
     }
   }
 
@@ -359,9 +363,9 @@ async function scoutMedia(path: string): Promise<Scout> {
   if (hasNothing(probe)) {
     return {
       probe: null,
-      note: `ffmpeg 读不出流信息，文件可能损坏或不是它扩展名宣称的格式：${
-        lastLine(result.stderr) || '（stderr 为空）'
-      }`
+      note: t('mcp.inspect.mediaUnreadable', {
+        detail: lastLine(result.stderr) || t('mcp.inspect.stderrEmpty')
+      })
     }
   }
 
@@ -388,11 +392,14 @@ async function scoutImage(path: string): Promise<Scout> {
     probe.height = meta.height ?? null
 
     if (probe.format === null && probe.width === null && probe.height === null) {
-      return { probe: null, note: 'sharp 认不出这个文件，也就没有尺寸可报' }
+      return { probe: null, note: t('mcp.inspect.imageUnrecognized') }
     }
     return { probe, note: null }
   } catch (error) {
-    return { probe: null, note: `sharp 读不出这张图的元数据：${describeError(error)}` }
+    return {
+      probe: null,
+      note: t('mcp.inspect.imageMetadataFailed', { reason: describeError(error) })
+    }
   }
 }
 
@@ -428,26 +435,33 @@ async function scoutArchive(path: string): Promise<Scout> {
   } catch (error) {
     // `bundledEnginePath()` 在 MCP 进程里没被 `setAppPaths()` 初始化过就会抛
     // （见 core/appPaths.ts）。这条也收成结构化结果——工具抛出去 agent 就只剩一句话了。
-    return { probe: null, note: `7-Zip 路径解析失败：${describeError(error)}` }
+    return {
+      probe: null,
+      note: t('mcp.inspect.archiveResolveFailed', { reason: describeError(error) })
+    }
   }
   if (!engine) {
-    return { probe: null, note: '找不到 7-Zip 可执行文件，列不出压缩包内容' }
+    return { probe: null, note: t('mcp.inspect.archiveNoEngine') }
   }
 
   const result = await run(engine.path, ['l', '-ba', '-slt', '--', path], PROBE_TIMEOUT_MS)
 
   if (result.spawnError) {
-    return { probe: null, note: `无法启动 7-Zip：${result.spawnError}` }
+    return { probe: null, note: t('mcp.inspect.archiveSpawnFailed', { reason: result.spawnError }) }
   }
   if (result.timedOut) {
-    return { probe: null, note: `7-Zip 超过 ${PROBE_TIMEOUT_MS / 1000} 秒没有返回，已杀掉进程树` }
+    return {
+      probe: null,
+      note: t('mcp.inspect.archiveTimeout', { seconds: PROBE_TIMEOUT_MS / 1000 })
+    }
   }
   if (result.code !== 0) {
     return {
       probe: null,
-      note: `7-Zip 列不出条目（退出码 ${result.code ?? '未知'}），文件可能损坏或需要完整版 7z：${
-        lastLine(result.stderr) || '（stderr 为空）'
-      }`
+      note: t('mcp.inspect.archiveListFailed', {
+        code: result.code ?? t('mcp.inspect.codeUnknown'),
+        detail: lastLine(result.stderr) || t('mcp.inspect.stderrEmpty')
+      })
     }
   }
 
@@ -503,11 +517,11 @@ export async function inspectFile(inputPath: string): Promise<InspectResult> {
   }
 
   if (raw === '') {
-    return { ...base, note: '路径为空' }
+    return { ...base, note: t('mcp.inspect.emptyPath') }
   }
 
   if (!existsSync(path)) {
-    return { ...base, note: `文件不存在：${path}` }
+    return { ...base, note: t('mcp.inspect.fileMissing', { path }) }
   }
 
   let isDirectory = false
@@ -517,27 +531,31 @@ export async function inspectFile(inputPath: string): Promise<InspectResult> {
     isDirectory = stats.isDirectory()
     size = isDirectory ? null : stats.size
   } catch (error) {
-    return { ...base, exists: true, note: `读不到文件属性：${describeError(error)}` }
+    return {
+      ...base,
+      exists: true,
+      note: t('mcp.inspect.statFailed', { reason: describeError(error) })
+    }
   }
 
   if (isDirectory) {
     // 不当作「0 字节的文件」往下走：那样 agent 会得到一个「空视频」的错误印象。
     // 目录本来就没有单一尺寸、也没有编解码器，明确说出来比返回一堆 null 有用。
-    return { ...base, exists: true, note: `这是一个目录，不是文件：${path}` }
+    return { ...base, exists: true, note: t('mcp.inspect.dirNotFile', { path }) }
   }
 
   const withSize: InspectResult = { ...base, exists: true, size }
 
   if (category === null) {
-    const shown = ext === '' ? '（无扩展名）' : `.${ext}`
+    const shown = ext === '' ? t('mcp.inspect.extNone') : `.${ext}`
     return {
       ...withSize,
-      note: `不认识的扩展名 ${shown}：能力矩阵里没有它，能转成什么无从判断。用 list_supported_formats 查一下支持的格式`
+      note: t('mcp.inspect.unknownExt', { ext: shown })
     }
   }
 
   if (targets.length === 0) {
-    return { ...withSize, note: `能力矩阵里没有 ${path} 的出口格式，它转不了` }
+    return { ...withSize, note: t('mcp.inspect.noTargets', { path }) }
   }
 
   const scout = await scoutFor(category, path)
@@ -575,7 +593,12 @@ function scoutFor(category: Category, path: string): Promise<Scout> {
     case 'ebook':
       return Promise.resolve({
         probe: null,
-        note: `${category === 'document' ? '文档' : '电子书'}不做子进程侦察：时长 / 分辨率 / 编解码器对它没有意义`
+        note: t('mcp.inspect.noSubprocessScout', {
+          category:
+            category === 'document'
+              ? t('mcp.inspect.categoryDocument')
+              : t('mcp.inspect.categoryEbook')
+        })
       })
   }
 }
@@ -605,7 +628,14 @@ export async function probeFile(inputPath: string): Promise<VerifySide> {
   const ext = extOf(path)
 
   if (raw === '') {
-    return { path, ext, category: null, size_bytes: null, probe: null, note: '路径为空' }
+    return {
+      path,
+      ext,
+      category: null,
+      size_bytes: null,
+      probe: null,
+      note: t('mcp.inspect.emptyPath')
+    }
   }
 
   let note: string | null = null
@@ -616,7 +646,7 @@ export async function probeFile(inputPath: string): Promise<VerifySide> {
     isDirectory = stats.isDirectory()
     size = isDirectory ? null : stats.size
   } catch (error) {
-    note = `读不到文件属性（文件可能已经被移走或删掉）：${describeError(error)}`
+    note = t('mcp.inspect.probeStatFailed', { reason: describeError(error) })
   }
 
   const category = categoryOf(ext)
@@ -628,7 +658,11 @@ export async function probeFile(inputPath: string): Promise<VerifySide> {
       category,
       size_bytes: size,
       probe: null,
-      note: note ?? `不认识的扩展名 ${ext === '' ? '（无扩展名）' : `.${ext}`}，没有可用的侦察手段`
+      note:
+        note ??
+        t('mcp.inspect.probeUnknownExt', {
+          ext: ext === '' ? t('mcp.inspect.extNone') : `.${ext}`
+        })
     }
   }
   if (isDirectory) {
@@ -638,7 +672,7 @@ export async function probeFile(inputPath: string): Promise<VerifySide> {
       category,
       size_bytes: null,
       probe: null,
-      note: '这是一个目录，不是文件'
+      note: t('mcp.inspect.probeDirNotFile')
     }
   }
 
@@ -651,6 +685,6 @@ export async function probeFile(inputPath: string): Promise<VerifySide> {
     probe: scout.probe,
     // 两个 note 只会有一个非空（读属性失败时探针几乎必然也失败，而探针的说明更具体），
     // 所以相加而不是覆盖：信息一条都不丢，措辞也不必在这里硬拼。
-    note: [scout.note, note].filter((line) => line !== null).join('；') || null
+    note: [scout.note, note].filter((line) => line !== null).join(t('mcp.inspect.noteJoin')) || null
   }
 }

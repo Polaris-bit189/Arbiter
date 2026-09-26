@@ -49,7 +49,7 @@ import {
   registerTaskIpc
 } from '../src/main/ipc/tasks'
 import { CH } from '../src/shared/ipc-contract'
-import type { Settings, Task, TaskProgress } from '../src/shared/types'
+import type { EncodePreset, Settings, Task, TaskProgress } from '../src/shared/types'
 import type { AddResult, TasksPatchMessage } from '../src/shared/ipc-contract'
 
 const FFMPEG = resolve('node_modules/ffmpeg-static/ffmpeg.exe')
@@ -780,24 +780,73 @@ async function main(): Promise<void> {
   )
   // 代价分档。这是**常量层面的**判据，行为层面的在下面那一节（峰值断言）。
   // 否证：把 FAST_LANE_MAX_BYTES 改小/HEAVY_COST 改成 1 → 对应那条翻红。
+  //
+  // 第三参数是任务的参数（编码质量档改变一条任务占几份）。这一节**全部**传 `undefined`：
+  // 它测的是「按体积分档」那一半，质量档那一半在紧接着的下面几条里单独断。
   check(
     '小输入按 1 份计（≤ 1 MiB）',
-    taskCost('ffmpeg', 8 * 1024) === 1 && taskCost('ffmpeg', 1024 * 1024) === 1,
-    String(taskCost('ffmpeg', 1024 * 1024))
+    taskCost('ffmpeg', 8 * 1024, undefined) === 1 &&
+      taskCost('ffmpeg', 1024 * 1024, undefined) === 1,
+    String(taskCost('ffmpeg', 1024 * 1024, undefined))
   )
   check(
     '大输入按 3 份计（> 1 MiB）',
-    taskCost('ffmpeg', 1024 * 1024 + 1) === 3 && taskCost('ffmpeg', 70 * 1024 * 1024) === 3,
-    String(taskCost('ffmpeg', 70 * 1024 * 1024))
+    taskCost('ffmpeg', 1024 * 1024 + 1, undefined) === 3 &&
+      taskCost('ffmpeg', 70 * 1024 * 1024, undefined) === 3,
+    String(taskCost('ffmpeg', 70 * 1024 * 1024, undefined))
   )
   check(
     '量不到体积时按重的算（宁可慢一点，不拿内存去赌）',
-    taskCost('ffmpeg', undefined) === 3,
-    String(taskCost('ffmpeg', undefined))
+    taskCost('ffmpeg', undefined, undefined) === 3,
+    String(taskCost('ffmpeg', undefined, undefined))
   )
   check(
     '非 ffmpeg 引擎不参与分档，一律 1 份',
-    taskCost('sharp', 70 * 1024 * 1024) === 1 && taskCost('archive', 70 * 1024 * 1024) === 1
+    taskCost('sharp', 70 * 1024 * 1024, undefined) === 1 &&
+      taskCost('archive', 70 * 1024 * 1024, undefined) === 1
+  )
+
+  // ---- 编码质量档那一半：慢预设更吃内存，所以按更多份记账 ----
+  //
+  // 逐档把**实测比值**钉住（数据与口径见 `core/queue.ts` 的 `PRESET_MEMORY_FACTOR`）。
+  // 三条一起才说明问题：
+  //   ① 快档**一个都不许变**（这是回归守卫：改了默认路线上的并发就是改了所有人的体验）；
+  //   ② 慢档真的**多占了**；
+  //   ③ 大文件 × 慢预设叠起来是 8 份（容量 12 → 只能开出 1 路）。
+  //
+  // ⚠️ 否证时注意：把 `PRESET_MEMORY_FACTOR` 里任意一档改成 1 → 对应的那条翻红；
+  // 把整个乘算删掉（`return base`）→ ②③ 一起翻红，而 ① 保持绿。**①与②必须成对存在**，
+  // 只留②的话「所有档位一律乘 2」这种改坏照样绿。
+  const fastPresets: EncodePreset[] = ['ultrafast', 'superfast', 'veryfast', 'faster', 'fast']
+  const slowPresets: EncodePreset[] = ['medium', 'slow', 'slower', 'veryslow']
+  check(
+    '快档不改变份数（默认那条路线的并发原样保留）',
+    fastPresets.every(
+      (preset) =>
+        taskCost('ffmpeg', 70 * 1024 * 1024, { quality: { preset } }) === 3 &&
+        taskCost('ffmpeg', 8 * 1024, { quality: { preset } }) === 1
+    ),
+    fastPresets
+      .map((p) => `${p}=${taskCost('ffmpeg', 70 * 1024 * 1024, { quality: { preset: p } })}`)
+      .join(' ')
+  )
+  check(
+    '慢档按 1.5 倍记账（大文件 3 → 5 份，容量 12 只能开出 2 路）',
+    slowPresets.every(
+      (preset) => taskCost('ffmpeg', 70 * 1024 * 1024, { quality: { preset } }) === 5
+    ),
+    slowPresets
+      .map((p) => `${p}=${taskCost('ffmpeg', 70 * 1024 * 1024, { quality: { preset: p } })}`)
+      .join(' ')
+  )
+  check(
+    'placebo 按 2.5 倍记账（大文件 8 份，容量 12 只能开出 1 路）',
+    taskCost('ffmpeg', 70 * 1024 * 1024, { quality: { preset: 'placebo' } }) === 8,
+    String(taskCost('ffmpeg', 70 * 1024 * 1024, { quality: { preset: 'placebo' } }))
+  )
+  check(
+    '质量档只影响 ffmpeg（图片走 sharp，写进去也不该动这本账）',
+    taskCost('sharp', 70 * 1024 * 1024, { quality: { preset: 'placebo' } }) === 1
   )
   check('LibreOffice 被限制为单实例', engineLimit('libreoffice') === 1)
   check('pdf 渲染被限制为单实例', engineLimit('pdf') === 1)
@@ -896,8 +945,8 @@ async function main(): Promise<void> {
   check('生成「重文件」素材（720p 30 秒，体积过 1 MiB）', await makeLongVideo(heavyClip, 30))
   check(
     '两个素材确实分在两个档上（否则下面三条是同义反复）',
-    taskCost('ffmpeg', (await stat(slowClip)).size) === 1 &&
-      taskCost('ffmpeg', (await stat(heavyClip)).size) === 3,
+    taskCost('ffmpeg', (await stat(slowClip)).size, undefined) === 1 &&
+      taskCost('ffmpeg', (await stat(heavyClip)).size, undefined) === 3,
     `轻 ${(await stat(slowClip)).size} / 重 ${(await stat(heavyClip)).size} 字节`
   )
 
@@ -4341,6 +4390,285 @@ async function main(): Promise<void> {
     stagesOfTask(silentLoud?.id).some((s) => s.includes('跳过响度归一化')),
     stagesOfTask(silentLoud?.id).join(' | ') || '（无提示）'
   )
+
+  /* ------------------------------------ [21] 编码质量档（P0-10，真编码） */
+
+  // ⚠️ 编号 21 而位置在 [17] 之前：**[17] 清理必须是最后一段**（它删目录并 `process.exit`）。
+  //
+  // 这一节的重点不是「参数有没有拼对」（那是 `test-core.ts` 的 [10]，纯数组比对、秒级），
+  // 而是**三个旋钮有没有真的落在码流上**。两者的区别很实在：命令行里拼出一句
+  // `-preset slow` 与「ffmpeg 真的按 slow 编了」之间隔着一整条分派链，
+  // 而漏掉任何一环的表现都是**产物照旧、任务报成功**。
+  //
+  // 素材沿用 [16]/[18] 那份 10 秒 640x360 h264+aac 的 mp4——它有一个承重性质：
+  // **mp4 → mkv 本来走 remux**（`-c copy`），所以「产物指纹与源不同」这一条
+  // 能直接证明质量档把快车道让开了，而不是绕过去静默复制了一遍。
+  console.log('\n[21] 编码质量档')
+
+  const qSrc = trimSrc
+  const qSrcPrint = await streamFingerprint(qSrc, '0:v:0')
+  check(
+    '质量档素材：视频指纹非空（下面每条「指纹不同」都以前置为准——空指纹与空指纹永远相等）',
+    qSrcPrint !== '',
+    qSrcPrint || '（空）'
+  )
+
+  /** 钉一个目标、设一组质量档、真跑一次，回产物路径与任务 */
+  const qualityRun = async (
+    fileName: string,
+    to: string,
+    quality: NonNullable<Task['options']>['quality']
+  ): Promise<{ out: string | null; task: Task | null }> => {
+    const id = await addOne(manager, await copyOf(qSrc, fileName))
+    if (id === null) return { out: null, task: null }
+    manager.setTarget(id, to)
+    const accepted = manager.setOptions(id, { quality })
+    check(`质量档：${fileName} 的参数被接受`, accepted, String(accepted))
+    manager.start([id])
+    await settle(manager)
+    const task = manager.list().find((t) => t.id === id) ?? null
+    return { out: outputOf(task), task }
+  }
+
+  // ---- 1. CRF 真的影响码流：体积按 CRF 单调 ----
+  //
+  // 判据写成**同一素材内部的比值**而不是绝对字节：绝对体积随素材变，
+  // 写成「crf 18 出来 400 KB」的话，换一份素材就会红得毫无意义。
+  // 实测这段素材上 crf 18 约是 crf 40 的 4~6 倍，门槛压到 1.6 倍仍然很硬。
+  const qLow = await qualityRun('q-crf18.mp4', 'mkv', { crf: 18, preset: 'veryfast' })
+  const qHigh = await qualityRun('q-crf40.mp4', 'mkv', { crf: 40, preset: 'veryfast' })
+  check(
+    'CRF 低的那份任务成功',
+    qLow.task?.status === 'done',
+    `${qLow.task?.status} ${qLow.task?.error ?? ''}`
+  )
+  check(
+    'CRF 高的那份任务成功',
+    qHigh.task?.status === 'done',
+    `${qHigh.task?.status} ${qHigh.task?.error ?? ''}`
+  )
+  const qLowBytes = qLow.out === null ? 0 : (await stat(qLow.out)).size
+  const qHighBytes = qHigh.out === null ? 0 : (await stat(qHigh.out)).size
+  check(
+    '⭐ CRF 18 的产物明显大于 CRF 40（这个旋钮真的落在码流上，而不是被当成默认值吃掉）',
+    qLowBytes > 0 && qHighBytes > 0 && qLowBytes > qHighBytes * 1.6,
+    `crf18 ${qLowBytes} / crf40 ${qHighBytes}`
+  )
+
+  // ---- 2. 预设与调优真的影响码流 ----
+  //
+  // ⚠️ **判据只能是「不同」，不能是「更大/更小」。** 实测（真实照片推镜的 640x640 片段，
+  // crf 23 固定）体积**不是单调的**——`veryfast` 反而比 `medium` 小，而它的 SSIM 更差。
+  // 写成「medium 的更小」会在真实素材上直接翻红，而那是**断言写错了**，不是实现坏了。
+  const qUltra = await qualityRun('q-ultra.mp4', 'mkv', { crf: 23, preset: 'ultrafast' })
+  const qMedium = await qualityRun('q-medium.mp4', 'mkv', { crf: 23, preset: 'medium' })
+  const qUltraPrint = qUltra.out === null ? '' : await streamFingerprint(qUltra.out, '0:v:0')
+  const qMediumPrint = qMedium.out === null ? '' : await streamFingerprint(qMedium.out, '0:v:0')
+  check(
+    '⭐ 预设真的落在码流上：ultrafast 与 medium（同 CRF）产出两条不同的视频流',
+    qUltraPrint !== '' && qMediumPrint !== '' && qUltraPrint !== qMediumPrint,
+    `${qUltraPrint || '（空）'} vs ${qMediumPrint || '（空）'}`
+  )
+  // ★ 同一族里还有一条**不可省**的：带质量档时产物必须与**源**不同。
+  // mp4 → mkv 不带参数本来走 `-c copy`（[13] 验过），所以这一条直接钉住了
+  // 「质量档让 remux 快车道失效」——少了它，一个「仍然走 remux、把质量档静默丢掉」
+  // 的实现会让上面那条也绿（两条产物当然不同……不，它们会**相同**，正是这一条抓它）。
+  check(
+    '⭐ 质量档让 remux 快车道失效（mp4 → mkv 不带参数是 `-c copy`，带了就必须重编码）',
+    qUltraPrint !== '' && qUltraPrint !== qSrcPrint,
+    `源 ${qSrcPrint || '（空）'} / 产物 ${qUltraPrint || '（空）'}`
+  )
+
+  // ⚠️ 「不调优」的基线必须与 grain **同样预设同 CRF**，只差 `-tune` 那一处。
+  // 第一版这里拿 `qUltra`（ultrafast）当基线，于是量到的是「预设的差别 + 调优的差别」，
+  // 而 veryfast 的体积本来就可能大于 ultrafast——那种断言在真实素材上直接假红。
+  const qPlain = await qualityRun('q-plain.mp4', 'mkv', { crf: 23, preset: 'veryfast' })
+  const qPlainPrint = qPlain.out === null ? '' : await streamFingerprint(qPlain.out, '0:v:0')
+  const qPlainBytes = qPlain.out === null ? 0 : (await stat(qPlain.out)).size
+  const qGrain = await qualityRun('q-grain.mp4', 'mkv', {
+    crf: 23,
+    preset: 'veryfast',
+    tune: 'grain'
+  })
+  const qGrainPrint = qGrain.out === null ? '' : await streamFingerprint(qGrain.out, '0:v:0')
+  const qGrainBytes = qGrain.out === null ? 0 : (await stat(qGrain.out)).size
+  check(
+    '⭐ 调优真的落在码流上：`-tune grain` 与不调优产出两条不同的流',
+    qGrainPrint !== '' && qPlainPrint !== '' && qGrainPrint !== qPlainPrint,
+    `${qGrainPrint || '（空）'} vs ${qPlainPrint || '（空）'}`
+  )
+  // 方向也断一次：只有「不同」的话，把 `-tune` 的值接到别处（或写成一个别的调优档）
+  // 照样绿。`-tune grain` 的语义是「保住胶片颗粒」，**结构上**就该多花比特，
+  // 实测两个方向都成立：640x360 testsrc +10.1%、640x640 真实照片 +73%。
+  // 门槛取 1.05 是按**小的那个**留余量——它不是「觉得差不多」，是两份实测的下界。
+  check(
+    '调优的方向对：grain 的产物大于不调优（实测 +10% ~ +73%，按小的那份留余量）',
+    qGrainBytes > qPlainBytes * 1.05,
+    `grain ${qGrainBytes} / 不调优 ${qPlainBytes}`
+  )
+
+  // ---- 3. 拒收面（`setOptions` 静默不办的那几条，必须一条不落） ----
+
+  const rejectId = await addOne(manager, await copyOf(qSrc, 'q-reject.mp4'))
+  check('拒收：任务建起来了（否则下面全是空转）', rejectId !== null)
+  if (rejectId !== null) {
+    check(
+      '拒收：质量档 + 体积目标同时给 → 拒（-crf 与 -b:v 会打架，产物体积与目标脱钩）',
+      !manager.setOptions(rejectId, {
+        quality: { crf: 18 },
+        output: { targetBytes: 1024 * 1024 }
+      })
+    )
+    check(
+      '拒收：空的质量档对象 → 拒（占着一个键会让同一条任务有两种表示）',
+      !manager.setOptions(rejectId, { quality: {} })
+    )
+    // ⚠️ `setTarget` 是 **void**（被拒的目标会让下拉弹回原值，那个视觉反馈本身就是回执），
+    // 所以不能写成 `manager.setTarget(...) && …`——左边恒为 undefined，
+    // 整条表达式恒假，断言会**永远红**（第一版就是这么写的）。
+    manager.setTarget(rejectId, 'webm')
+    check(
+      '前置：目标确实换成 webm 了（否则下面那条拒收是假的）',
+      manager.list().find((t) => t.id === rejectId)?.toExt === 'webm',
+      String(manager.list().find((t) => t.id === rejectId)?.toExt)
+    )
+    check(
+      '拒收：目标格式不支持时 → 拒（webm 走 vp9，它的 CRF 是另一条尺子）',
+      !manager.setOptions(rejectId, { quality: { crf: 18 } })
+    )
+    manager.setTarget(rejectId, 'mkv')
+    check(
+      '反方向：改回 mp4 之后同样的参数就收下了（拒的是出口，不是这一项本身）',
+      manager.setOptions(rejectId, { quality: { crf: 18 } })
+    )
+  }
+
+  // ---- 3b. 引擎层那道出口判据（`setTarget` 竞态） ----
+  //
+  // ⚠️ **这一节是 `falsify:tasks` 逼出来的。** 上面那条「目标格式不支持时 → 拒」走的是
+  // `setOptions` 那道闸——`setOptions` 在参数设下去的时候就拒了，所以**引擎层那一份
+  // 判据一条断言都够不着**：把 `ffmpegRun` 里的 `if (!supportsQuality(toExt))` 整个删掉，
+  // 全套一条都不会红（实测：那个变异下零红）。
+  //
+  // 引擎层那份判据挡的是一个真场景：**目标格式在参数设完之后还能改**
+  //（`setTarget` 不碰 `options`）。所以这里就走那条路——先给 mkv 设质量档、再改成 webm，
+  // 然后真跑一次。少了引擎层那道闸，`quality` 会一路传到 `videoArgs`，而 webm 那一格
+  // **看不见它**：三个旋钮被静默丢掉、任务报成功，用户以为自己的 CRF 18 生效了。
+  const qRaceId = await addOne(manager, await copyOf(qSrc, 'q-race.mp4'))
+  check('出口竞态：任务建起来了（否则下面全是空转）', qRaceId !== null)
+  if (qRaceId !== null) {
+    manager.setTarget(qRaceId, 'mkv')
+    check(
+      '出口竞态：质量档在目标是 mkv 时设得上',
+      manager.setOptions(qRaceId, { quality: { crf: 18 } })
+    )
+    manager.setTarget(qRaceId, 'webm')
+    check(
+      '出口竞态：目标确实改成 webm 了（前置——否则下面跑的还是 mkv，那条断言恒真）',
+      manager.list().find((t) => t.id === qRaceId)?.toExt === 'webm',
+      String(manager.list().find((t) => t.id === qRaceId)?.toExt)
+    )
+    manager.start([qRaceId])
+    await settle(manager)
+    const qRaceTask = manager.list().find((t) => t.id === qRaceId) ?? null
+    check(
+      '⭐ 出口竞态：任务**失败**而不是把质量档静默丢掉（webm 走 vp9，认不出这套旋钮）',
+      qRaceTask?.status === 'error',
+      `${qRaceTask?.status} ${qRaceTask?.error ?? ''}`
+    )
+    check(
+      '出口竞态：错误文案点明「这个出口没有编码质量档」并给出下一步',
+      (qRaceTask?.logTail ?? []).some((line) => line.includes('没有编码质量档')) &&
+        (qRaceTask?.logTail ?? []).some((line) => line.includes('mp4 / mkv / mov / avi')),
+      (qRaceTask?.logTail ?? []).join(' | ') || '（无日志）'
+    )
+  }
+
+  const qAudioSrc = resolve(TMP, 'q-audio.mp3')
+  await writeFile(qAudioSrc, 'not really an mp3', 'utf8')
+  const audioId = await addOne(manager, await copyOf(qAudioSrc, 'q-audio2.mp3'))
+  check(
+    '拒收：音频任务不接受质量档（只有视频有这三个旋钮）',
+    audioId !== null && !manager.setOptions(audioId, { quality: { crf: 18 } })
+  )
+
+  // ---- 4. 与「无损裁剪」互斥：**报错，不静默二选一** ----
+  //
+  // 这一条刻意留在引擎层（而不是 `setOptions` 那一层）：两者在契约上并不冲突
+  // （一个选一段、一个定画质），只有真正动手时才发现「无损裁剪一个字节都不重编，
+  // 改不了画质」。静默二选一的两种后果都是「不报错的错误答案」，所以必须报错。
+  const qLosslessId = await addOne(manager, await copyOf(qSrc, 'q-lossless.mp4'))
+  check('互斥：无损裁剪 + 质量档的任务建起来了', qLosslessId !== null)
+  if (qLosslessId !== null) {
+    manager.setTarget(qLosslessId, 'mkv')
+    const bothAccepted = manager.setOptions(qLosslessId, {
+      trim: { start: 1, end: 4, mode: 'lossless' },
+      quality: { crf: 18 }
+    })
+    check('互斥：契约层允许两者共存（冲突要到引擎层才成立）', bothAccepted)
+    manager.start([qLosslessId])
+    await settle(manager)
+    const qLosslessTask = manager.list().find((t) => t.id === qLosslessId) ?? null
+    check(
+      '互斥：任务失败而不是静默挑一个',
+      qLosslessTask?.status === 'error',
+      `${qLosslessTask?.status}`
+    )
+    check(
+      '互斥：错误文案说的是「无损裁剪」这件事（不是一句笼统的转换失败）',
+      (qLosslessTask?.logTail ?? []).some((line) => line.includes('无损裁剪')),
+      (qLosslessTask?.logTail ?? []).join(' | ') || '（无日志）'
+    )
+  }
+
+  // ---- 5. 显卡互斥：设了质量档就走 CPU，而且**说出来** ----
+  //
+  // 手法抄 [14]/[18]：把探测结果**强行压成 true**，于是有卡没卡都走同一条判断
+  // ——写成「有卡测这条、没卡测那条」的话，没卡的机器上那条断言就是空集合恒真。
+  setHardwareEncodeProbe(Promise.resolve(true))
+  updateSettings({ hardwareEncode: true })
+  const qGpu = await qualityRun('q-gpu.mp4', 'mkv', { crf: 23, preset: 'slow' })
+  check(
+    'GPU 互斥：任务成功（没有因为「找不到显卡」之类的原因挂掉）',
+    qGpu.task?.status === 'done',
+    `${qGpu.task?.status} ${qGpu.task?.error ?? ''}`
+  )
+  check(
+    '⭐ GPU 互斥：明确说出「本次用 CPU」，而不是静默换一条路',
+    stagesOfTask(qGpu.task?.id).some((s) => s.includes('质量档与显卡编码的参数不是同一套')),
+    stagesOfTask(qGpu.task?.id).join(' | ') || '（无提示）'
+  )
+  updateSettings({ hardwareEncode: false })
+  setHardwareEncodeProbe(Promise.resolve(false))
+
+  // ---- 6. 质量档要真的存进 `task.options` ----
+  //
+  // 这是**记账那条链的第 0 环**：`TaskManager.costOf` 读的就是 `task.options`，
+  // 所以「参数没落进 task」这件事会让整本并发账按快档记——而队列只是悄悄多放进去
+  // 几条重编码，**没有任何症状**。代价换算本身在 [4]（常量层）与 `test-core.ts` 的
+  // `[10]`（`costOf` 的接线是**结构性断言**）里断，这里只断「参数存住了」。
+  const qCostId = await addOne(manager, await copyOf(qSrc, 'q-cost.mp4'))
+  if (qCostId !== null) {
+    const bytes = (await stat(qSrc)).size
+    check(
+      '记账：这条素材本身落在「重文件」那一档（否则下面算出来的份数不是质量档的影响）',
+      taskCost('ffmpeg', bytes, undefined) === 3,
+      `${bytes} 字节 → ${taskCost('ffmpeg', bytes, undefined)} 份`
+    )
+    const stored = manager.setOptions(qCostId, { quality: { preset: 'veryslow' } })
+    const qCostTask = manager.list().find((t) => t.id === qCostId) ?? null
+    check(
+      '记账：质量档真的存进了 task.options（`costOf` 就是从这儿读的）',
+      stored && qCostTask?.options?.quality?.preset === 'veryslow',
+      JSON.stringify(qCostTask?.options)
+    )
+    check(
+      '记账：慢预设 + 重文件 = 5 份（容量 12 只能开出 2 路）',
+      taskCost('ffmpeg', bytes, qCostTask?.options) === 5,
+      String(taskCost('ffmpeg', bytes, qCostTask?.options))
+    )
+    manager.cancel([qCostId])
+  }
 
   /* ---------------------------------------------------------- [17] 清理 */
 

@@ -73,6 +73,12 @@ jobs:
           npm run test:doc
           npm run test:downlink
 
+      # 插件「找应用」那一步（约束 21 那一族）。单开一步是因为它盯的失败**只在本仓库外
+      # 现形**：应用装在默认位置之外时，插件会整个起不来，而开发机上仓库根那条候选
+      # 永远兜得住。判定本身是纯逻辑 + 一次临时注册表键往返，秒级。
+      - name: Plugin target discovery
+        run: npm run test:plugin-target
+
       # 下面两步是 i18n 改造（P0）之前就立好的两道网，都是**秒级、纯读源码**的结构判据：
       #
       #   - preload 依赖图（约束 1 的机器化守卫）：`sandbox: true` 的 preload 里
@@ -82,7 +88,7 @@ jobs:
       - name: Guard the preload dependency graph
         run: npm run test:preload-imports
 
-      #   - 15 支 falsify 脚本的锚点总检：有人重构了被变异覆盖的代码、锚点跟丢时，
+      #   - 16 支 falsify 脚本的锚点总检：有人重构了被变异覆盖的代码、锚点跟丢时，
       #     这里几秒就报出来。少了它，锚点过期要等**一整轮反证**才发现
       #     （falsify:tasks 22 分钟、falsify:mcp 141 秒），而报出来的文案长得像
       #     「断言抓不住错误」——会诱人去放宽断言，方向正好反了（约束 33 记过这次事故）。

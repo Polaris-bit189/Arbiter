@@ -1,6 +1,7 @@
 import { rmSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { ipcMain, shell } from 'electron'
+import { t } from '@shared/i18n'
 import { CH, integrationSetSchema, type IntegrationState } from '@shared/ipc-contract'
 import { readContextMenu, syncContextMenu, type ContextMenuState } from '../core/integration'
 import {
@@ -67,7 +68,7 @@ const electronSendToIo: SendToIo = {
         // 给成 exe 所在目录，行为与用户手建的快捷方式一致。
         cwd: dirname(spec.target)
       })
-      return ok ? null : '写入快捷方式失败（shell.writeShortcutLink 返回 false）'
+      return ok ? null : t('ipc.integration.shortcutWriteFailed')
     } catch (error) {
       return error instanceof Error ? error.message : String(error)
     }
@@ -137,7 +138,7 @@ async function applyContextMenu(wanted: boolean): Promise<string | null> {
   }
   // `state.error` 可能是 null（比如要求装、结果读回来没装上）。那种情况也得给
   // 用户一句人话，否则界面上只有一个纹丝不动的开关。
-  return state.error ?? '注册表没有落到预期状态'
+  return state.error ?? t('ipc.integration.contextMenuNotApplied')
 }
 
 /** 「发送到」那一侧：写/删快捷方式 → 成了才落设置 */
@@ -147,7 +148,7 @@ function applySendTo(wanted: boolean): string | null {
     updateSettings({ sendTo: wanted })
     return null
   }
-  return state.error ?? '快捷方式没有落到预期状态'
+  return state.error ?? t('ipc.integration.sendToNotApplied')
 }
 
 export function registerIntegrationIpc(): void {
@@ -163,7 +164,7 @@ export function registerIntegrationIpc(): void {
     if (!parsed.success) {
       // 与 settings:set 同一个口径：被拒比被静默忽略好，但被拒的痕迹必须留在终端上，
       // 否则渲染层看到的只是「点了没反应」，两端都查不出原因。
-      console.warn('[integration] 拒绝了一份不合规的载荷：', parsed.error.issues)
+      console.warn(t('ipc.log.integrationRejected'), parsed.error.issues)
       return integrationState()
     }
 

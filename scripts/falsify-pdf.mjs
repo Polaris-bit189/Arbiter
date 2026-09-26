@@ -184,7 +184,11 @@ if (process.argv.slice(2).includes('--anchors-only')) {
 }
 
 function runTests() {
-  const out = spawnSync('node', ['scripts/run-pdf-test.mjs'], { encoding: 'utf8', shell: false })
+  const out = spawnSync('node', ['scripts/run-pdf-test.mjs'], {
+    encoding: 'utf8',
+    shell: false,
+    maxBuffer: 32 * 1024 * 1024
+  })
   const text = out.stdout + out.stderr
   const reds = text
     .split(/\r?\n/)

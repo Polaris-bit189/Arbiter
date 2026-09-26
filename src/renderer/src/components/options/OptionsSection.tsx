@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react'
+import { t } from '@shared/i18n'
 
 /**
  * 参数面板里**一块**参数的外壳：标题 + 内容 + 校验错误 + 应用/清除。
@@ -55,11 +56,11 @@ export function OptionsSection({
           disabled={reason !== null || busy}
           onClick={onApply}
         >
-          应用
+          {t('options.apply')}
         </button>
         {canClear && (
           <button type="button" className="btn-secondary" disabled={busy} onClick={onClear}>
-            清除
+            {t('options.clear')}
           </button>
         )}
       </div>

@@ -1,6 +1,7 @@
 import { watch, type FSWatcher } from 'fs'
 import { readdir, rename, stat } from 'fs/promises'
 import { join } from 'path'
+import { t } from '@shared/i18n'
 import { diffRename, watchableName, type DirEntry, type RenameCandidate } from './renameWatch'
 
 /**
@@ -115,7 +116,7 @@ export class RenameWatcher {
       } catch (err) {
         // 目录不存在 / 没权限。**要说出来**，否则用户开了开关、配置了目录、
         // 却什么都不会发生，而界面上那个开关是打开的。
-        this.effects.warn(`无法监听目录「${dir}」：${messageOf(err)}`)
+        this.effects.warn(t('integration.rename.watchFailed', { dir, reason: messageOf(err) }))
       }
     }
 
@@ -190,7 +191,7 @@ export class RenameWatcher {
     }
 
     if (names.length > this.maxEntries) {
-      this.effects.warn(`目录「${dir}」条目过多（${names.length}），已跳过重命名监听`)
+      this.effects.warn(t('integration.rename.tooManyEntries', { dir, count: names.length }))
       return null
     }
 
@@ -248,7 +249,13 @@ export class RenameWatcher {
       // 我们一个字节都没删，用户想反悔只需要把它改回去。
       await rename(renamedPath, sourcePath)
     } catch (err) {
-      this.effects.warn(`把「${candidate.to}」改回「${candidate.from}」失败：${messageOf(err)}`)
+      this.effects.warn(
+        t('integration.rename.revertFailed', {
+          to: candidate.to,
+          from: candidate.from,
+          reason: messageOf(err)
+        })
+      )
       // 失败也可能留下了半截状态（比如目标名被占），照样重建基线
       await this.refreshBaseline(dir)
       return
@@ -272,24 +279,40 @@ export class RenameWatcher {
         await rename(sourcePath, renamedPath)
       } catch (err) {
         restored = false
-        this.effects.warn(`把「${candidate.from}」改回「${candidate.to}」失败：${messageOf(err)}`)
+        this.effects.warn(
+          t('integration.rename.revertFailed', {
+            to: candidate.from,
+            from: candidate.to,
+            reason: messageOf(err)
+          })
+        )
       }
       if (restored) await this.refreshBaseline(dir)
 
       // 告警只发一条，而且**由这里发**——回滚是这里做的，说清「名字为什么变回去了」
       // 也只有这里知道。放在调用方的 `enqueue` 里发的话，同一件事会被说两遍，
       // 而且那一条说不出「文件名已经还给你了」。
-      this.effects.warn(
-        `「${candidate.to}」没能转成 ${candidate.toExt.toUpperCase()}：${outcome.reason}` +
-          (restored ? `。文件名已改回「${candidate.to}」` : '。文件名没能还原，请手动检查')
-      )
+      const rejected = t('integration.rename.enqueueRejected', {
+        to: candidate.to,
+        ext: candidate.toExt.toUpperCase(),
+        reason: outcome.reason
+      })
+      // 后半句是**拼上去的半句**（字典里它以句点开头），所以这里用 `+` 而不是两个参数
+      const tail = restored
+        ? t('integration.rename.nameRestored', { to: candidate.to })
+        : t('integration.rename.nameNotRestored')
+      this.effects.warn(rejected + tail)
       return
     }
 
     this.effects.notify(
-      '调律者转换器',
-      `「${candidate.to}」的内容其实是 ${candidate.fromExt.toUpperCase()}，已经按真正的 ` +
-        `${candidate.toExt.toUpperCase()} 转换。原文件保留为「${candidate.from}」。`
+      t('integration.notify.title'),
+      t('integration.rename.notifyBody', {
+        to: candidate.to,
+        fromExt: candidate.fromExt.toUpperCase(),
+        toExt: candidate.toExt.toUpperCase(),
+        from: candidate.from
+      })
     )
   }
 }

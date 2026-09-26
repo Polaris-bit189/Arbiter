@@ -3,7 +3,9 @@ import { homedir } from 'os'
 import { join, resolve } from 'path'
 import { fileURLToPath } from 'url'
 import { extOf, resolveDefaultTarget, targetsFor } from '@shared/formats'
+import { t, tKey } from '@shared/i18n'
 import { isAsarPath, setAppPaths, type AppPaths } from '../main/core/appPaths'
+import { applyLocale } from '../main/core/locale'
 import { parseCliRequest } from '../main/core/cli'
 import { getSettings } from '../main/core/settings'
 import { isRecipeEmpty, parseRecipe, type Recipe } from '@shared/recipe'
@@ -77,33 +79,23 @@ interface CliPayload {
   error?: CliFailure
 }
 
-const USAGE = `arbiter —— 调律者转换器（Arbiter）的命令行
-
-用法：
-  arbiter convert <文件...> [--to <扩展名>] [--out <路径>] [--recipe <路径>] [--json]
-  arbiter --version
-  arbiter --help
-
-选项：
-  --to <扩展名>   目标格式，不带点（mp4 / md / png …）。省略时用应用里该类别的默认目标
-  --out <路径>    产物的完整路径（含文件名）。只允许配一个源文件
-  --recipe <路径> 配方文件（JSON）：{"target": "mp4", "mode": "remux"}
-                  --to 比配方里的 target 优先；mode 目前只能从配方给
-  --json          结果以**恰好一个** JSON 对象打到 stdout
-  -h, --help      显示这段帮助
-  -v, --version   显示版本号
-
-退出码：
-  0    成功
-  1    转换失败（引擎跑了但没成功）
-  2    参数错（用法 / 源文件不存在 / 这个格式组合不支持）
-  3    引擎缺失（需要按需下载的引擎，本机还没装）
-  4    内部错误
-  130  被 Ctrl-C 打断
-
-stdout 只有数据：--json 时是一个 JSON 对象，否则是产物路径（一行一个）。
-诊断、进度、警告一律走 stderr。
-`
+/**
+ * 用法正文（`cli.usage`）。**是一个函数而不是模块级常量**，理由有两条：
+ *
+ * - **语言是在本文件末尾那段引导里才定下来的**（`applyLocale()` 与 `protectStdout()`
+ *   挨着）。模块级常量在 import 那一刻求值，于是它会永远停在启动时那门语言上
+ *   ——P2 的 `MENU_LABEL` / `STATUS_META` 栽过同一个形状。
+ * - 它同时喂给 stdout（`--help`）与 stderr（参数错），**两处都是显式的人话**：
+ *   `--help` 那一路是用户点名要的，不是 `--json` 那条数据通道。
+ *
+ * 取词走 `tKey` 而不是 `t`：这段正文里字面写着一个 `{"target": …}` 的例子，而
+ * `t` 的参数类型是从模板里的 `{name}` 抠出来的（`ParamNames`），那个 JSON 例子会被
+ * 当成一个占位符 → `t(key)` 报「Expected 2 arguments」。`tKey` 放宽的只是类型，
+ * 运行时的插值是同一条 `interpolate`。
+ */
+function usage(): string {
+  return tKey('cli.usage')
+}
 
 /**
  * 错误码 → 退出码。
@@ -154,7 +146,7 @@ function loadRecipe(path: string | null): RecipeLoad {
   try {
     text = readFileSync(path, 'utf8')
   } catch {
-    return { ok: false, message: `读不了配方文件：${path}` }
+    return { ok: false, message: t('cli.recipe.readFailed', { path }) }
   }
 
   let parsed: unknown
@@ -162,15 +154,15 @@ function loadRecipe(path: string | null): RecipeLoad {
     parsed = JSON.parse(text)
   } catch (error) {
     const why = error instanceof Error ? error.message : String(error)
-    return { ok: false, message: `配方不是合法的 JSON：${path}（${why}）` }
+    return { ok: false, message: t('cli.recipe.badJson', { path, why }) }
   }
 
   const { recipe, problems } = parseRecipe(parsed)
-  for (const problem of problems) log(`⚠️ 配方 ${path}：${problem}`)
+  for (const problem of problems) log(t('cli.recipe.problem', { path, problem }))
   if (isRecipeEmpty(recipe)) {
     return {
       ok: false,
-      message: `这份配方一个字段都没认出来：${path}（只认 target 与 mode，见 --help）`
+      message: t('cli.recipe.empty', { path })
     }
   }
   return { ok: true, recipe }
@@ -182,7 +174,7 @@ function usageFailure(message: string): CliFailure {
     code: 'usage',
     message,
     retryable: false,
-    next_steps: ['跑 `arbiter --help` 看用法', '目标格式写成不带点的扩展名，如 mp4 / md / png']
+    next_steps: [t('cli.usage.nextHelp'), t('cli.usage.nextTarget')]
   }
 }
 
@@ -235,15 +227,15 @@ async function convertOne(
     stat = statSync(source)
   } catch {
     throw new McpToolError(
-      `找不到源文件：${source}`,
-      { source, hint: '路径要写全（相对路径按当前工作目录解析），且文件必须已经存在' },
+      t('cli.source.notFound', { source }),
+      { source, hint: t('cli.source.notFoundHint') },
       { code: 'source_missing' }
     )
   }
   if (!stat.isFile()) {
     throw new McpToolError(
-      `这是一个目录，不是文件：${source}`,
-      { source, hint: 'CLI 只转文件；目录递归还没做' },
+      t('cli.source.isDirectory', { source }),
+      { source, hint: t('cli.source.isDirectoryHint') },
       { code: 'source_missing' }
     )
   }
@@ -258,8 +250,13 @@ async function convertOne(
     requestedTo ?? recipe.target ?? resolveDefaultTarget(fromExt, getSettings().defaultTargets)
   if (toExt === null) {
     throw new McpToolError(
-      `认不出源格式，或者 .${fromExt} 没有任何可用的目标格式`,
-      { source, from: fromExt, targets: targetsFor(fromExt), hint: '用 --to 显式指定目标格式' },
+      t('cli.source.unknownFormat', { from: fromExt }),
+      {
+        source,
+        from: fromExt,
+        targets: targetsFor(fromExt),
+        hint: t('cli.source.unknownFormatHint')
+      },
       { code: 'unknown_format' }
     )
   }
@@ -278,15 +275,11 @@ async function convertOne(
   // 那 100ms 会原样加在每一次进程启动上（hook 那条路尤其在意）。
   const done = await registry.waitFor(job.id, { pollMs: 20 })
   if (done === null) {
-    throw new McpToolError(
-      '内部状态异常：提交之后立刻找不到这个任务',
-      { source },
-      { code: 'internal' }
-    )
+    throw new McpToolError(t('cli.job.lost'), { source }, { code: 'internal' })
   }
   if (done.status !== 'done') {
     throw new McpToolError(
-      done.error ?? '转换失败',
+      done.error ?? t('cli.convert.failed'),
       {
         source,
         to: done.toExt,
@@ -312,7 +305,7 @@ async function main(): Promise<number> {
   const command = parseCliRequest(argv, process.cwd())
 
   if (command.kind === 'help') {
-    await writeStdout(USAGE)
+    await writeStdout(usage())
     return EXIT.OK
   }
 
@@ -324,7 +317,7 @@ async function main(): Promise<number> {
   if (command.kind === 'error') {
     log(`arbiter: ${command.message}`)
     log('')
-    log(USAGE)
+    log(usage())
     // `--json` 时**仍然**要往 stdout 写一个合法 JSON：契约是「stdout 是恰好一个
     // JSON 对象，或者空」，而参数错正是最容易只吼 stderr、让调用方解析到
     // `Unexpected end of JSON input` 的一类。
@@ -350,7 +343,7 @@ async function main(): Promise<number> {
   const onSignal = (signal: string): void => {
     if (closing) return
     closing = true
-    log(`收到 ${signal}，正在取消…`)
+    log(t('cli.signal.canceling', { signal }))
     registry.shutdown()
     // 给 taskkill 一点时间真的跑完，与 `src/mcp/main.ts` 的收尾同一个形状。
     setTimeout(() => process.exit(EXIT.INTERRUPTED), 500)
@@ -377,7 +370,7 @@ async function main(): Promise<number> {
       // **第一条失败决定退出码**（多文件时后面的失败只进 JSON）。理由：退出码只能表达
       // 一件事，而调用方最该先处理的就是第一条——后面的多半是它的连带结果。
       if (failure === null) failure = failed
-      log(`${source} 失败：${failed.message}`)
+      log(t('cli.result.failed', { source, message: failed.message }))
       for (const line of failed.log_tail ?? []) log(`  | ${line}`)
     }
   }
@@ -477,9 +470,10 @@ function resolvePaths(): AppPaths {
   // （同一件事在 `build/arbiter.cmd` 的注释里记着原始观测）。
   // ffmpeg 这个症状看不出来——asar 里还躺着一份 ffmpeg-static 能兜住。
   if (isPackaged && !existsSync(resourcesPath)) {
+    // 两半合成一句：`cli.paths.*` 按源码片段拆成 Head / Tail（理由见那片字典的文件头），
+    // 拼回去的成品句子与迁移前逐字节相同。
     problems.push(
-      `resourcesPath=${resourcesPath} 不存在：打包形态下随包引擎就在它下面，` +
-        '缺了它会被判成「没装」'
+      t('cli.paths.resourcesMissingHead', { resourcesPath }) + t('cli.paths.resourcesMissingTail')
     )
   }
 
@@ -489,15 +483,12 @@ function resolvePaths(): AppPaths {
   // 这条正是 `arbiter.cmd` 自己的注释里记着的那次事故的另一半（它一开始只设了
   // `ELECTRON_RUN_AS_NODE`）——两个变量少一个，症状一模一样。
   if (!isPackaged && isAsarPath(appPath)) {
-    problems.push(
-      `appPath=${appPath} 指向 asar 内部，但 ARBITER_IS_PACKAGED 不是 1：` +
-        '引擎解析会走 dev 分支，随包引擎找不到'
-    )
+    problems.push(t('cli.paths.appPathAsarHead', { appPath }) + t('cli.paths.appPathAsarTail'))
   }
 
   if (problems.length > 0) {
     // 五条值本身也打出来：它们**只在出事时**才打，而那一刻正是人要看它们的时刻。
-    // 环境变量名写全，**不写「见 --help」**——`USAGE` 里根本没有这一段，那会把人指到
+    // 环境变量名写全，**不写「见 --help」**——`usage()` 里根本没有这一段，那会把人指到
     // 一个查不到的地方去（与约束 21 里那句误导性的「这个安装包可能早于 0.2.0」同一个毛病）。
     const used = [
       `    appPath=${appPath}`,
@@ -508,10 +499,10 @@ function resolvePaths(): AppPaths {
     ]
     // 只走 stderr：stdout 是数据通道（见 `./stdio.ts` 与 docs/NOTES.md 约束 20）。
     process.stderr.write(
-      '[arbiter] 路径装配与实际不符（这会让已经装好的引擎被判成「没装」）：\n' +
+      t('cli.paths.mismatchHead') +
         problems.map((p) => `  - ${p}\n`).join('') +
-        '  本次实际用的值（ARBITER_APP_PATH / ARBITER_RESOURCES_PATH / ' +
-        'ARBITER_IS_PACKAGED / ARBITER_USER_DATA / ARBITER_DOWNLOADS 可以覆盖）：\n' +
+        t('cli.paths.mismatchValuesHead') +
+        t('cli.paths.mismatchValuesTail') +
         used.map((line) => `${line}\n`).join('')
     )
   }
@@ -540,6 +531,8 @@ function resolveVersion(): string {
 protectStdout()
 const PATHS = resolvePaths()
 setAppPaths(PATHS)
+// 与 MCP 同一条：CLI 也没有「系统语言」，'system' 解析成 'zh'。
+applyLocale()
 
 main()
   .then((code) => {
@@ -552,7 +545,7 @@ main()
     // 走到这里说明是 `main()` 自己出了我们没预料到的事。**仍然只往 stderr 写**：
     // stdout 上此刻可能已经有一个合法的 JSON 了（比如多文件时中途炸），
     // 再补一段文本进去等于亲手把它变成垃圾。
-    log(`[arbiter] 未预期的错误：${error instanceof Error ? error.message : String(error)}`)
+    log(t('cli.unexpected', { message: error instanceof Error ? error.message : String(error) }))
     if (error instanceof Error && error.stack) log(error.stack)
     process.exit(EXIT.INTERNAL)
   })

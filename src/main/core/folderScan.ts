@@ -2,6 +2,7 @@ import { readdir, realpath, stat } from 'node:fs/promises'
 import type { Dirent } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { categoryOf, extOf } from '@shared/formats'
+import { t } from '@shared/i18n'
 
 /**
  * 文件夹递归扫描（`docs/PLAN.md` §9.1 的 E-4）。
@@ -207,17 +208,17 @@ export interface ScanOptions {
 
 const errnoOf = (error: unknown): string => {
   const code = (error as NodeJS.ErrnoException | null)?.code
-  return typeof code === 'string' && code.length > 0 ? code : '未知错误'
+  return typeof code === 'string' && code.length > 0 ? code : t('folderScan.errno.unknown')
 }
 
 /** 命中哪条排除规则，没命中返回 null。**只看目录名/前缀，绝不看某一层的文件** */
 function excludeReason(name: string, fullPath: string, rules: ScanRules): string | null {
   const lower = name.toLowerCase()
   if (rules.names.some((item) => item.toLowerCase() === lower)) {
-    return `按默认排除清单跳过（${name}），未扫描`
+    return t('folderScan.skip.byName', { name })
   }
   if (rules.prefixes.some((prefix) => lower.startsWith(prefix.toLowerCase()))) {
-    return `按默认排除清单跳过（${name}*），未扫描`
+    return t('folderScan.skip.byPrefix', { name })
   }
   const lowerPath = fullPath.toLowerCase()
   const root = rules.roots.find((item) => {
@@ -228,7 +229,7 @@ function excludeReason(name: string, fullPath: string, rules: ScanRules): string
       lowerPath.startsWith(`${prefix}/`)
     )
   })
-  if (root !== undefined) return `按默认排除清单跳过（系统目录 ${root}），未扫描`
+  if (root !== undefined) return t('folderScan.skip.bySystemRoot', { root })
   return null
 }
 
@@ -287,7 +288,7 @@ export async function scanFolder(root: string, options: ScanOptions = {}): Promi
     // 解析不了（权限、路径已经在消失）就退回字面路径：宁可多扫一次，也不要漏掉一个目录。
     const real = await io.realpath(dir).catch(() => dir)
     if (seen.has(real)) {
-      excluded.push({ path: dir, reason: '重复目录（符号链接指向同一处或成环），未重复扫描' })
+      excluded.push({ path: dir, reason: t('folderScan.skip.cycle') })
       continue
     }
     seen.add(real)
@@ -298,7 +299,7 @@ export async function scanFolder(root: string, options: ScanOptions = {}): Promi
     } catch (error) {
       // 权限不足 / 目录刚被移走**都只跳过这一个目录**，不是整趟失败：
       // 一棵树里有一个别人的私有目录，不该让另外两千个文件也收不进来。
-      skipped.push({ path: dir, reason: `无法读取（${errnoOf(error)}），已跳过` })
+      skipped.push({ path: dir, reason: t('folderScan.skip.unreadable', { code: errnoOf(error) }) })
       continue
     }
     dirsScanned += 1
@@ -382,7 +383,10 @@ const MAX_SAMPLE = 5
 /** 把报告里的一部分路径缩成「a、b、c 等 N 个」 */
 function sampleOf(items: ScanSkip[], limit = MAX_SAMPLE): string {
   const names = items.slice(0, limit).map((item) => item.path.split(/[\\/]/).pop() ?? item.path)
-  return items.length > limit ? `${names.join('、')} 等 ${items.length} 个` : names.join('、')
+  const joined = names.join(t('folderScan.sep.names'))
+  return items.length > limit
+    ? t('folderScan.sample.more', { names: joined, count: items.length })
+    : joined
 }
 
 /**
@@ -400,32 +404,40 @@ export function confirmPromptFor(report: ScanReport): ScanPrompt | null {
 
   const total = report.files.length
   const recursiveButton = report.truncated
-    ? `加入这 ${total} 个（已达上限）`
-    : `加入这 ${total} 个文件`
+    ? t('folderScan.button.addCapped', { total })
+    : total === 1
+      ? t('folderScan.button.add.one', { total })
+      : t('folderScan.button.add.other', { total })
 
   const lines: string[] = [
-    `文件夹：${report.root}`,
-    `已扫过 ${report.dirsScanned} 个目录，其中认得的目标文件 ${total} 个。`
+    t('folderScan.prompt.root', { path: report.root }),
+    t('folderScan.prompt.scanned', { dirs: report.dirsScanned, total })
   ]
 
   if (report.truncated) {
     lines.push(
-      `⚠️ 已达扫描上限 ${report.limit}，这个文件夹里还有没扫到的部分。` +
-        `这次只会加入前 ${total} 个，剩下的请再选一次更小的文件夹。`
+      t('folderScan.prompt.truncatedLimit', { limit: report.limit }) +
+        t('folderScan.prompt.truncatedRest', { total })
     )
   }
 
   const topCount = report.files.filter((path) => dirname(path) === report.root).length
-  if (topCount > 0) lines.push(`其中直接躺在这一层里的有 ${topCount} 个。`)
+  if (topCount > 0) lines.push(t('folderScan.prompt.topCount', { count: topCount }))
 
   if (report.excluded.length > 0) {
     lines.push(
-      `按默认排除清单跳过了 ${report.excluded.length} 个目录：${sampleOf(report.excluded)}。`
+      t('folderScan.prompt.excluded', {
+        count: report.excluded.length,
+        names: sampleOf(report.excluded)
+      })
     )
   }
   if (report.skipped.length > 0) {
     lines.push(
-      `有 ${report.skipped.length} 个目录读不了（权限不足或已不存在），已跳过：${sampleOf(report.skipped)}。`
+      t('folderScan.prompt.skipped', {
+        count: report.skipped.length,
+        names: sampleOf(report.skipped)
+      })
     )
   }
 
@@ -433,15 +445,18 @@ export function confirmPromptFor(report: ScanReport): ScanPrompt | null {
   const choices: FolderScope[] = ['recursive']
 
   if (topCount > 0) {
-    buttons.push(`只加这一层（${topCount} 个）`)
+    buttons.push(t('folderScan.button.topOnly', { count: topCount }))
     choices.push('top')
   }
 
-  buttons.push('取消')
+  buttons.push(t('folderScan.button.cancel'))
   choices.push('cancel')
 
   return {
-    message: `将加入 ${total} 个文件`,
+    message:
+      total === 1
+        ? t('folderScan.prompt.message.one', { total })
+        : t('folderScan.prompt.message.other', { total }),
     detail: lines.join('\n'),
     buttons,
     choices
@@ -494,19 +509,19 @@ export function reportLines(report: ScanReport): { path: string; reason: string 
       // 而「还有 N 个」这件事本身就是要说的话。不重复列出前 20 个之外的路径，
       // 是因为那些路径的**理由全都一样**，列出来只会把清单淹掉。
       lines.push({
-        path: `…另有 ${items.length - MAX_REPORT_LINES} 个目录`,
+        path: t('folderScan.report.more', { count: items.length - MAX_REPORT_LINES }),
         reason: fallback
       })
     }
   }
 
-  push(report.excluded, '同上（按默认排除清单跳过）')
-  push(report.skipped, '同上（读不了的目录）')
+  push(report.excluded, t('folderScan.report.sameExcluded'))
+  push(report.skipped, t('folderScan.report.sameSkipped'))
 
   if (report.truncated) {
     lines.push({
-      path: `已达扫描上限 ${report.limit}`,
-      reason: '文件夹里还有没扫到的部分，剩下的请再选一次更小的文件夹'
+      path: t('folderScan.report.limit', { limit: report.limit }),
+      reason: t('folderScan.report.limitReason')
     })
   }
 
@@ -515,9 +530,18 @@ export function reportLines(report: ScanReport): { path: string; reason: string 
 
 /** 一句话汇总，给界面上的 toast 用 */
 export function reportSummary(report: ScanReport): string {
-  const parts = [`找到 ${report.files.length} 个文件`]
-  if (report.truncated) parts.push(`已达上限 ${report.limit}，还有没扫到的`)
-  if (report.excluded.length > 0) parts.push(`按清单跳过 ${report.excluded.length} 个目录`)
-  if (report.skipped.length > 0) parts.push(`${report.skipped.length} 个目录读不了`)
-  return parts.join('；')
+  const count = report.files.length
+  const parts = [
+    count === 1
+      ? t('folderScan.summary.found.one', { count })
+      : t('folderScan.summary.found.other', { count })
+  ]
+  if (report.truncated) parts.push(t('folderScan.summary.capped', { limit: report.limit }))
+  if (report.excluded.length > 0) {
+    parts.push(t('folderScan.summary.excluded', { count: report.excluded.length }))
+  }
+  if (report.skipped.length > 0) {
+    parts.push(t('folderScan.summary.unreadable', { count: report.skipped.length }))
+  }
+  return parts.join(t('folderScan.sep.summary'))
 }

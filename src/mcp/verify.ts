@@ -1,3 +1,4 @@
+import { t } from '@shared/i18n'
 import type { Category } from '@shared/types'
 
 /**
@@ -19,10 +20,13 @@ import type { Category } from '@shared/types'
  *    「PSNR 32dB，画质下降」是判断，超出这个工具敢负责的范围（本项目不含画质评估，
  *    也没有做过任何失真度量）。整个返回里没有分数、没有等级、没有「质量」二字。
  *    所以 `Comparison` 里全是**可复核的数字与真假**，`facts` 里全是「量到了什么」。
- * 3. **本模块是纯的。** 零运行时 import（`Category` 是类型，编译后不留痕迹）——
+ * 3. **本模块是纯的。** 运行时 import 只有 `@shared/i18n`（零依赖、不碰 electron）——
  *    于是它能在**封锁 electron 的进程**里被逐条断言（`test-mcp-view.ts` 的 [H] 节），
  *    而「判据宽不宽」这件事恰恰只能靠一堆人造探针去问：真跑一遍转换根本造不出
  *    「时长差 0.03s」「gif 没有音轨」这些边界。起子进程那一半在 `selfCheck.ts` 里。
+ *
+ *    ⚠️ **别在这里 import `inspect.ts` / `src/main/**`**：判据与侦察分家是这一节的前提，
+ *    `test-mcp-view.ts` 有一条断言盯着它（加载本模块不许把 `inspect.ts` 拖进缓存）。
  *
  * ⚠️ **别在 `facts` 里下结论。** 判据是「这句话是一个测量结果，还是一个判断」：
  * 「时长：产物 12.03s / 源 12.00s（差 +0.03s）」是测量；
@@ -193,51 +197,50 @@ export function compareConversion(source: VerifySide, output: VerifySide): Verif
   const checked: CheckKey[] = []
 
   /* ---------------------------------------------------------- 分辨率 */
-  const dimsKnown =
-    sp !== null &&
-    op !== null &&
-    sp.width !== null &&
-    sp.height !== null &&
-    op.width !== null &&
-    op.height !== null
-  const resolutionMatches = dimsKnown ? sp.width === op.width && sp.height === op.height : null
+  // 四个数先取齐成 `dims`：`null` 的含义是「这一项没查」，不是「不一致」（见
+  // `VerificationComparison`）。取成局部量不只是为了好看——文案要的是**四个数字**，
+  // 而 `sp.width` 在合成布尔（`dimsKnown`）之后**不再被 TS 收窄**：`t()` 的参数是
+  // `string | number`，传一个 `number | null` 是编译错误。
+  const sourceW = sp?.width ?? null
+  const sourceH = sp?.height ?? null
+  const outputW = op?.width ?? null
+  const outputH = op?.height ?? null
+  const dimsKnown = sourceW !== null && sourceH !== null && outputW !== null && outputH !== null
+  const resolutionMatches = dimsKnown ? sourceW === outputW && sourceH === outputH : null
   const dimsComparable = dimsKnown && resolutionComparable(source, output)
-  if (dimsComparable && sp !== null && op !== null) {
+  const dims =
+    sourceW !== null && sourceH !== null && outputW !== null && outputH !== null
+      ? { w: sourceW, h: sourceH, ow: outputW, oh: outputH }
+      : null
+  if (dimsComparable && dims !== null) {
     checked.push('resolution')
     if (resolutionMatches === true) {
-      facts.push(`分辨率 ${sp.width}x${sp.height}，与源一致`)
+      facts.push(t('mcp.verify.resolutionSame', { w: dims.w, h: dims.h }))
     } else {
-      facts.push(`分辨率与源不同：源 ${sp.width}x${sp.height} → 产物 ${op.width}x${op.height}`)
+      facts.push(t('mcp.verify.resolutionDiffers', dims))
     }
-  } else if (dimsKnown && sp !== null && op !== null) {
+  } else if (dims !== null) {
     // 不判定的那一档：数字照报（agent 有权知道产物多少像素），但不说「不同」。
-    facts.push(`尺寸：源 ${sp.width}x${sp.height} / 产物 ${op.width}x${op.height}`)
+    facts.push(t('mcp.verify.dimsLine', dims))
     if (resolutionMatches === false) {
-      notes.push(
-        `产物尺寸与源不同（${sp.width}x${sp.height} → ${op.width}x${op.height}）：视频转 gif 走的` +
-          '是我们的调色板链，那条链自己带 `scale=480:-1`（engines/ffmpeg.ts 的 GIF_FILTER），' +
-          '尺寸是**我们定的**，所以这一项不参与判定，只把两个数报出来。'
-      )
+      notes.push(t('mcp.verify.gifSizeNote', dims))
     }
   }
 
   /* ------------------------------------------------------ 视频编解码器 */
-  const codecsKnown =
-    sp?.videoCodec !== null &&
-    sp?.videoCodec !== undefined &&
-    op?.videoCodec !== null &&
-    op?.videoCodec !== undefined
-  const videoCodecMatches = codecsKnown ? sp.videoCodec === op.videoCodec : null
-  if (codecsKnown) {
+  // 与上面同一处：两种编解码器都取成局部量，`if` 里逐项直写——合成布尔之后 TS
+  // 不再收窄，而 `t()` 不收 `null`。
+  const sourceCodec = sp?.videoCodec ?? null
+  const outputCodec = op?.videoCodec ?? null
+  const codecsKnown = sourceCodec !== null && outputCodec !== null
+  const videoCodecMatches = codecsKnown ? sourceCodec === outputCodec : null
+  if (codecsKnown && sourceCodec !== null && outputCodec !== null) {
     checked.push('video_codec')
     if (videoCodecMatches === true) {
-      facts.push(`视频编解码器 ${sp.videoCodec}，与源相同`)
+      facts.push(t('mcp.verify.codecSame', { codec: sourceCodec }))
     } else {
-      facts.push(`视频编解码器：源 ${sp.videoCodec} → 产物 ${op.videoCodec}`)
-      notes.push(
-        '编解码器变了不算差异：目标容器装不下源的编码器时本来就要重编码' +
-          '（mp4 → webm 必然从 h264 变成 vp9/vp8），这条只报事实。'
-      )
+      facts.push(t('mcp.verify.codecDiffers', { from: sourceCodec, to: outputCodec }))
+      notes.push(t('mcp.verify.codecChangedNote'))
     }
   }
 
@@ -252,17 +255,17 @@ export function compareConversion(source: VerifySide, output: VerifySide): Verif
   if (audioMeasurable) {
     checked.push('audio')
     if (sp?.hasAudio === true && op?.hasAudio === false) {
-      facts.push('产物没有音轨，而源有')
+      facts.push(t('mcp.verify.audioLost'))
     } else if (sp?.hasAudio === true && op?.hasAudio === true) {
-      facts.push('音轨：源与产物都有')
+      facts.push(t('mcp.verify.audioBoth'))
     } else if (sp?.hasAudio === false && op?.hasAudio === true) {
-      facts.push('源没有音轨，而产物有')
-      notes.push('产物多出一条音轨有点反常（本项目不做「加音轨」这件事），值得自己核对。')
+      facts.push(t('mcp.verify.audioOutputOnly'))
+      notes.push(t('mcp.verify.audioExtraNote'))
     } else {
-      facts.push('音轨：源与产物都没有')
+      facts.push(t('mcp.verify.audioNeither'))
     }
   } else if (sp?.hasAudio === true) {
-    notes.push('源有音轨，但产物的元数据没读出来，所以「音轨还在不在」这一项没查成。')
+    notes.push(t('mcp.verify.audioUnknownNote'))
   }
 
   /* ------------------------------------------------------------ 视频流 */
@@ -272,7 +275,7 @@ export function compareConversion(source: VerifySide, output: VerifySide): Verif
   const videoLost = videoMeasurable ? sp?.hasVideo === true && op?.hasVideo === false : null
   if (videoMeasurable) {
     checked.push('video_stream')
-    if (op?.hasVideo === false) facts.push('产物没有视频流，而源有')
+    if (op?.hasVideo === false) facts.push(t('mcp.verify.videoLost'))
   }
 
   /* -------------------------------------------------------------- 时长 */
@@ -290,37 +293,35 @@ export function compareConversion(source: VerifySide, output: VerifySide): Verif
   if (durationComparable) {
     checked.push('duration')
     facts.push(
-      `时长：产物 ${sec(outputDur ?? 0)} / 源 ${sec(sourceDur ?? 0)}（差 ${signed(delta ?? 0)}）`
+      t('mcp.verify.durationLine', {
+        output: sec(outputDur ?? 0),
+        source: sec(sourceDur ?? 0),
+        delta: signed(delta ?? 0)
+      })
     )
     if (delta !== null && Math.abs(delta) > DURATION_NOTEWORTHY_SEC) {
-      notes.push(
-        `产物时长与源相差 ${signed(delta)}。重新分装（ts → mp4 那类）与 gif 本来就会让容器` +
-          '报的时长变，所以时长**不参与**「一致 / 不一致」的判定；但差到这个量级确实是一处' +
-          '差异，值得自己核对。'
-      )
+      notes.push(t('mcp.verify.durationNoteworthyNote', { delta: signed(delta) }))
     }
   }
 
   /* ---------------------------------------------------------- 探针失败 */
   if (op === null) {
-    notes.push(`产物的元数据没读出来：${output.note ?? '（没有说明）'}`)
+    notes.push(
+      t('mcp.verify.outputProbeMissing', { note: output.note ?? t('mcp.verify.noteUnstated') })
+    )
   }
   if (sp === null) {
-    notes.push(`源的元数据没读出来：${source.note ?? '（没有说明）'}`)
+    notes.push(
+      t('mcp.verify.sourceProbeMissing', { note: source.note ?? t('mcp.verify.noteUnstated') })
+    )
   }
 
   /* ------------------------------------------------------ 没什么可比的 */
   if (checked.length === 0) {
     if (source.category === 'archive' || output.category === 'archive') {
-      notes.push(
-        '压缩包不比内容：拆开重打包是正常路径，条目数与源不保证相同，所以这一项刻意不比。' +
-          '产物读得出来、非空，这两条已经由任务本身核过。'
-      )
+      notes.push(t('mcp.verify.archiveNote'))
     } else {
-      notes.push(
-        '两边都没有可比的项目：图片没有时长与编解码器、gif 也没有音轨，' +
-          '文档与电子书则不做子进程侦察（见 inspect.ts 的分派）。'
-      )
+      notes.push(t('mcp.verify.nothingComparableNote'))
     }
   }
 

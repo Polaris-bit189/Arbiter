@@ -1,4 +1,15 @@
-import type { DenoiseStrength, FilterAction, LoudnormAction, ResizeAction } from '@shared/types'
+import type {
+  DenoiseStrength,
+  FilterAction,
+  LoudnormAction,
+  QualityOptions,
+  ResizeAction
+} from '@shared/types'
+// ✅ 这两个常量原先**就写在下面**，而理由（`test:core` 不带 `--tsconfig`、解析不了
+// `@shared/*`）在 P4 时消失了：那一轮给 `test:core` / `test:doc` 补上了 `--tsconfig`，
+// 起因是 `jsonStore.ts` 也开始值导入 `@shared/i18n`、把同样的坑重新踩了一遍。
+// 副本与防漂断言一并删掉——**同一个事实现在只有一个来源**。
+import { DEFAULT_CRF, DEFAULT_PRESET } from '@shared/options'
 import type { MediaInfo } from '../core/probe'
 
 const AUDIO_TARGETS = new Set(['mp3', 'wav', 'flac', 'aac', 'm4a', 'ogg', 'opus'])
@@ -212,7 +223,43 @@ const NVENC_VIDEO = ['-c:v', 'h264_nvenc', '-preset', 'p4', '-cq', '30']
  */
 const NVENC_TARGETS = new Set(['mkv', 'mp4', 'mov', 'm4v', 'avi'])
 
-function videoArgs(target: string, hardware = false, enc?: EncodeTarget): string[] {
+/**
+ * libx264 那一套参数：编码器 + 速度档 + 恒定质量 + 调优。
+ *
+ * **省略 `quality` 时拼出来的数组与加这个参数之前逐字相同**
+ * （`-c:v libx264 -preset veryfast -crf 23`），所以没设过质量档的任务产物一个字节都不变。
+ * 三个字段各自可省，缺省值取的是 `@shared/options` 里那两个常量——
+ * 它们与这里原先写死的字面量是同一个数，两处放一个数而不是各写一份。
+ *
+ * ⚠️ **`-tune` 只对 x264 成立**（libvpx / NVENC 都没有同名的东西），所以调用方必须
+ * 先用 `supportsQuality()` 筛过出口。`-tune` 的取值表在 `@shared/types` 的
+ * `ENCODE_TUNES`（那里写了为什么刻意不收 `psnr` / `ssim`）。
+ *
+ * ⚠️ **这三个旋钮之间的换算关系不存在**（实测）：同一个 CRF 在不同 preset 下
+ * **不是同一个画质**——`veryfast` 在同 CRF 下体积最小、而 SSIM 也最差。
+ * 所以别在任何地方写「换更慢的预设 = 更小的体积」，那是错的。数据见 `QualityOptions`。
+ */
+function x264Args(quality?: QualityOptions): string[] {
+  const preset = quality?.preset ?? DEFAULT_PRESET
+  const crf = quality?.crf ?? DEFAULT_CRF
+  const tune = quality?.tune
+  return [
+    '-c:v',
+    'libx264',
+    '-preset',
+    preset,
+    '-crf',
+    String(crf),
+    ...(tune === undefined ? [] : ['-tune', tune])
+  ]
+}
+
+function videoArgs(
+  target: string,
+  hardware = false,
+  enc?: EncodeTarget,
+  quality?: QualityOptions
+): string[] {
   const kbps = enc?.videoKbps
   if (kbps !== undefined) {
     // ---- ABR（码率模式）：用户给的码率，或由目标体积反推出来的码率 ----
@@ -222,7 +269,7 @@ function videoArgs(target: string, hardware = false, enc?: EncodeTarget): string
     // 有输出目标时**根本不会去探显卡**（少花那 200ms，也堵住「静默产出一个不达标的体积」）。
     const rate = `${Math.max(1, Math.round(kbps))}k`
     const codec =
-      target === 'webm' ? ['-c:v', 'libvpx-vp9'] : ['-c:v', 'libx264', '-preset', 'veryfast']
+      target === 'webm' ? ['-c:v', 'libvpx-vp9'] : ['-c:v', 'libx264', '-preset', DEFAULT_PRESET]
     const audio =
       enc?.audioKbps !== undefined
         ? ['-c:a', audioCodecOf(target), '-b:a', `${Math.max(1, Math.round(enc.audioKbps))}k`]
@@ -231,21 +278,28 @@ function videoArgs(target: string, hardware = false, enc?: EncodeTarget): string
   }
 
   // 目标容器的默认视频编码是 h264 且这次允许用 GPU —— 只有音频那一侧还按原样
+  //
+  // ⚠️ **有质量档时走不到这里**：`-tune` / `-preset` 与 NVENC 那套不是同一个词汇表，
+  // 而 `-crf 23` 与 `-cq 23` 同号不同质（实测 2.8 倍体积差）。调用方
+  // （`converters/ffmpegRun.ts`）在质量档非空时**根本不探显卡**，与「有输出目标时不探」
+  // 是同一条规矩——两条都落在那一段 `if` 上。
   if (hardware && NVENC_TARGETS.has(target)) {
     return [...NVENC_VIDEO, ...defaultAudioArgs(target)]
   }
 
   switch (target) {
     case 'webm':
+      // vp9 的 CRF 定义域是 0~63，与 x264 的 0~51 **不是一条尺子**，所以这一格刻意
+      // 不吃 `quality`（`supportsQuality('webm')` 为 false，调用方会先拦下）。
       return ['-c:v', 'libvpx-vp9', '-crf', '32', '-b:v', '0', ...defaultAudioArgs(target)]
     case 'avi':
-      return ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '23', ...defaultAudioArgs(target)]
+      return [...x264Args(quality), ...defaultAudioArgs(target)]
     case 'mkv':
     case 'mp4':
     case 'mov':
     case 'm4v':
     default:
-      return ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '23', ...defaultAudioArgs(target)]
+      return [...x264Args(quality), ...defaultAudioArgs(target)]
   }
 }
 
@@ -614,6 +668,14 @@ export function buildFfmpegArgs(
      * **线性**归一化；不给就是单遍的动态归一化。
      */
     loudnorm?: LoudnormStats | null
+    /**
+     * 编码质量档（恒定质量 / 速度档 / 调优）。**与 `target.videoKbps` 互斥**——
+     * 两者同时给时下面会抛，理由见 `@shared/options` 的 `QUALITY_OUTPUT_EXCLUSIVE`。
+     *
+     * 只对走 libx264 的视频出口有意义（`supportsQuality()` 筛过的那些）。
+     * 音频出口、图片出口、webm、gif 都读不到它——调用方必须先拦。
+     */
+    quality?: QualityOptions
   } = {}
 ): string[] {
   const from = fromExt.toLowerCase()
@@ -621,6 +683,17 @@ export function buildFfmpegArgs(
   const trim = options.trim
   const enc = options.target
   const filters = options.filters ?? []
+  const quality = options.quality
+
+  // 质量档与码率目标**互斥**。调用方已经用 `QUALITY_OUTPUT_EXCLUSIVE` 拦过一次
+  // （`converters/ffmpegRun.ts`，那里能给出「下一步怎么办」），这里再抛一次是因为
+  // 静默挑一个的后果很贵：挑 `-crf` 等于把用户填的体积目标悄悄丢掉，挑 `-b:v` 则相反——
+  // 而 x264 同时见到两者时会**回到质量模式**、把 `-b:v` 只当上限，产物体积与目标
+  // 彻底脱钩而任务报成功。两条都不报错的错法，所以宁可在这里炸掉。
+  // （与 `audioArgs` 里那两格「无损出口没有码率可设」是同一种兜底，理由也一样。）
+  if (quality !== undefined && enc?.videoKbps !== undefined) {
+    throw new Error('ffmpeg: 编码质量档与码率目标不能同时给')
+  }
 
   // 两条链各算一次。`vf` 在**音频出口**上必须是 null：`-vn` 与 `-vf` 同时出现时
   // ffmpeg 直接报 `Output file does not contain any stream` 并以非 0 退出（实测），
@@ -661,12 +734,12 @@ export function buildFfmpegArgs(
       '1',
       '-t',
       String(STILL_DURATION_SEC),
-      ...videoArgs(to, false, enc),
+      ...videoArgs(to, false, enc, quality),
       ...vfArgs,
       ...afArgs
     ]
   } else {
-    encode = [...videoArgs(to, hardware, enc), ...vfArgs, ...afArgs]
+    encode = [...videoArgs(to, hardware, enc, quality), ...vfArgs, ...afArgs]
   }
 
   return [

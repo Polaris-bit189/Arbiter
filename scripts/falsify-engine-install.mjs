@@ -182,7 +182,8 @@ const TS = 'tsconfig.test.json'
 function runTests() {
   const out = spawnSync('npx', ['tsx', '--tsconfig', TS, 'scripts/test-engine-install.ts'], {
     encoding: 'utf8',
-    shell: true
+    shell: true,
+    maxBuffer: 32 * 1024 * 1024
   })
   const text = out.stdout + out.stderr
   const reds = text

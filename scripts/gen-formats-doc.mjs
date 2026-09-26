@@ -21,6 +21,10 @@ const OUT = new URL('../docs/FORMATS.md', import.meta.url)
 
 const f = await import(SRC)
 
+// 引擎名的**真相源**（`ENGINE_KEYS`）。它住在 `types.ts`，与 `formats.ts` 同目录，
+// 所以跟着 `SRC` 走（搬运期 `ARBITER_SRC` 指向别处时也取得到）。
+const t = await import(new URL('./types.ts', SRC).href)
+
 const ENGINE_LABEL = {
   ffmpeg: 'FFmpeg',
   sharp: 'sharp',
@@ -28,8 +32,31 @@ const ENGINE_LABEL = {
   archive: '7-Zip',
   calibre: 'Calibre',
   libreoffice: 'LibreOffice',
-  pandoc: 'pandoc'
+  pandoc: 'pandoc',
+  encmusic: '加密音乐容器'
 }
+
+/**
+ * 「引擎对照」表的数据。**只有「实际是什么」那一列需要手写**（它是散文，派生不出来）——
+ * 「表里的名字」取自 `ENGINE_LABEL`，「在瘦包里？」由 `BUNDLED` 算，两者都别写死。
+ *
+ * ⚠️ **必须覆盖 `ENGINE_KEYS` 全集**，末尾那条自检钉着这件事。加引擎时忘了回来补一行，
+ * 生成器**当场非零退出**，而不是让某个引擎在文档里静默缺席。`encmusic` 就是这样漏过一次：
+ * 这张表里没有它、`ENGINE_LABEL` 里也没有，于是生成出来的表体那一行的引擎列显示成裸名。
+ */
+const ENGINE_TABLE = [
+  { key: 'ffmpeg', what: 'ffmpeg-static 静态构建' },
+  { key: 'sharp', what: 'libvips 原生模块' },
+  { key: 'pdf', what: '纯 JS（mammoth / SheetJS）+ Chromium 排版 + pdfjs' },
+  { key: 'archive', what: '完整的 7z.exe + 7z.dll' },
+  {
+    key: 'encmusic',
+    what: '纯 JS 开壳器：把 ncm / qmc* / mflac / mgg / kwm / xm 剥回 mp3 / flac，再交给 ffmpeg'
+  },
+  { key: 'calibre', what: 'MSI 解包目录树，约 658 MB' },
+  { key: 'libreoffice', what: 'MSI 解包目录树，约 1.49 GiB' },
+  { key: 'pandoc', what: '单文件自包含 exe，221 MiB' }
+]
 
 const CATEGORY_LABEL = {
   video: '视频',
@@ -100,7 +127,26 @@ const tables = Object.keys(CATEGORY_LABEL)
 //
 // 所以 B 这一路是承重的：清单的 `routes` 与 `requiresDownload()` 是同一份真相源的两侧，
 // `scripts/test-downlink.ts` 的 `[11]` 节也从测试那一侧钉着同一件事。
-const BUNDLED = new Set(['ffmpeg', 'sharp', 'pdf', 'archive'])
+const manifest = JSON.parse(
+  readFileSync(new URL('../resources/engines.manifest.json', import.meta.url), 'utf8')
+)
+
+/** 要按需下载的引擎——**清单说了算**。 */
+const DOWNLOADABLE = new Set((manifest.engines ?? []).map((e) => e.key))
+
+/**
+ * 随包引擎 = 全部 `EngineKey` 减去要下载的那些。**派生，不手写。**
+ *
+ * ⚠️ 这里原先是一张手写的白名单（`ffmpeg / sharp / pdf / archive`），加 `encmusic`
+ * 那次漏了它，于是 91 条加密音乐路由全被判成「要用一个不在包里的引擎，而
+ * `requiresDownload()` 不认账」，整节「瘦包缺口」变成假警报。它的可见形态很绕：
+ * **生成器自己不报错**（缺口数只是 `console.log`），红的是 CI 那条
+ * `git diff --exit-code docs/FORMATS.md`——而它连着把后面四个步骤一起 skip 掉了。
+ *
+ * 换成派生之后，**加随包引擎不必再回来登记**。前提是「要下载的引擎必须进清单」，
+ * 而那是本来就必须的：清单是下载功能的输入（URL / sha256 / 体积都在里面）。
+ */
+const BUNDLED = new Set(t.ENGINE_KEYS.filter((k) => !DOWNLOADABLE.has(k)))
 
 const missing = [] // 要下载、但 requiresDownload() 不认领 → 界面不会预告，用户直接看到失败
 const downloads = [] // 要下载且认领正常
@@ -119,9 +165,6 @@ for (const category of Object.keys(CATEGORY_LABEL)) {
 
 // 反向：清单声明「这条要拉起我」，但 requiresDownload() 没这么说。
 // 这正是 rst 那四条的形态——engineFor 看不出问题，只有清单知道。
-const manifest = JSON.parse(
-  readFileSync(new URL('../resources/engines.manifest.json', import.meta.url), 'utf8')
-)
 let declaredRoutes = 0
 for (const engine of manifest.engines ?? []) {
   for (const pair of engine.routes ?? []) {
@@ -201,13 +244,11 @@ const lines = [
   '',
   '| 表里的名字 | `EngineKey` | 实际是什么 | 在瘦包里？ |',
   '| --- | --- | --- | --- |',
-  '| FFmpeg | `ffmpeg` | ffmpeg-static 静态构建 | ✅ |',
-  '| sharp | `sharp` | libvips 原生模块 | ✅ |',
-  '| 内置文档引擎 | `pdf` | 纯 JS（mammoth / SheetJS）+ Chromium 排版 + pdfjs | ✅ |',
-  '| 7-Zip | `archive` | 完整的 7z.exe + 7z.dll | ✅ |',
-  '| Calibre | `calibre` | MSI 解包目录树，约 658 MB | ❌ 首次使用时下载 |',
-  '| LibreOffice | `libreoffice` | MSI 解包目录树，约 1.49 GiB | ❌ 首次使用时下载 |',
-  '| pandoc | `pandoc` | 单文件自包含 exe，221 MiB | ❌ 首次使用时下载 |',
+  ...ENGINE_TABLE.map(
+    (e) =>
+      `| ${ENGINE_LABEL[e.key]} | \`${e.key}\` | ${e.what} | ` +
+      `${BUNDLED.has(e.key) ? '✅' : '❌ 首次使用时下载'} |`
+  ),
   '',
   "> 「内置文档引擎」这个 `EngineKey` 的字面量就是 `'pdf'`，它管的不只是 PDF——",
   '> 文档类里凡是**不需要** LibreOffice 和 pandoc 的转换都走它。名字是历史遗留，',
@@ -270,6 +311,24 @@ if (zeroTargets.length) {
     ...zeroTargets.map((z) => `- ${z}`),
     ''
   )
+}
+
+// —— 自检：两处手写的引擎事实都不许漏 ——
+//
+// `ENGINE_LABEL` 与 `ENGINE_TABLE` 是本文档里仅剩的两处**手写**的引擎事实
+// （其余全从 `formats.ts` / `types.ts` / 引擎清单派生）。漏一个引擎的表现是**静默的**：
+// 表体里那一行的引擎列退化成裸的 `EngineKey`，而文档照样生成、`git diff` 也照样有内容
+// 可看——只是没有任何东西**说得清**「少了一行」。`encmusic` 就是这么漏过去的。
+//
+// 所以把「漏登记」变成一次硬失败：`console.error` + 非零退出，而不是往 markdown 里
+// 写一句告警——没有人会去读生成产物里的告警，但没有人能忽略一个红的 CI。
+const uncovered = t.ENGINE_KEYS.filter(
+  (k) => !(k in ENGINE_LABEL) || !ENGINE_TABLE.some((e) => e.key === k)
+)
+if (uncovered.length) {
+  console.error(`✗ 生成器没覆盖这些引擎：${uncovered.join('、')}`)
+  console.error('  `ENGINE_LABEL` 与 `ENGINE_TABLE` 各补一条（「实际是什么」派生不出来）。')
+  process.exit(1)
 }
 
 writeFileSync(OUT, lines.join('\n'), 'utf8')

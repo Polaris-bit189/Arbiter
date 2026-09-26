@@ -42,6 +42,7 @@ main 与 renderer 共用同一份。**这里和代码不一致时，以代码为
 | ogg | mp3、wav、flac、aac、m4a、opus | FFmpeg |
 | opus | mp3、wav、flac、aac、m4a、ogg | FFmpeg |
 | wma / aiff / aif | mp3、wav、flac、aac、m4a、ogg、opus | FFmpeg |
+| ncm / qmc0 / qmc2 / qmc3 / qmcflac / qmcogg / mflac / mflac0 / mgg / mgg1 / mggl / kwm / xm | mp3、wav、flac、aac、m4a、ogg、opus | 加密音乐容器 |
 
 ### 图片
 
@@ -103,6 +104,7 @@ main 与 renderer 共用同一份。**这里和代码不一致时，以代码为
 | sharp | `sharp` | libvips 原生模块 | ✅ |
 | 内置文档引擎 | `pdf` | 纯 JS（mammoth / SheetJS）+ Chromium 排版 + pdfjs | ✅ |
 | 7-Zip | `archive` | 完整的 7z.exe + 7z.dll | ✅ |
+| 加密音乐容器 | `encmusic` | 纯 JS 开壳器：把 ncm / qmc* / mflac / mgg / kwm / xm 剥回 mp3 / flac，再交给 ffmpeg | ✅ |
 | Calibre | `calibre` | MSI 解包目录树，约 658 MB | ❌ 首次使用时下载 |
 | LibreOffice | `libreoffice` | MSI 解包目录树，约 1.49 GiB | ❌ 首次使用时下载 |
 | pandoc | `pandoc` | 单文件自包含 exe，221 MiB | ❌ 首次使用时下载 |

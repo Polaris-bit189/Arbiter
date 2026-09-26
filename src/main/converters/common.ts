@@ -1,4 +1,5 @@
 import { rename, rm } from 'fs/promises'
+import type { ErrorRef } from '@shared/i18n/errors'
 import type { TaskOptions, TaskProgress } from '@shared/types'
 import { killTree } from '../core/kill'
 import type { CancelToken } from '../core/cancel'
@@ -64,7 +65,16 @@ export class ConversionFailed extends Error {
      * 都不返回退出码。而调用方（agent）是照着 `message` 与 `next_steps` 决定下一步的，
      * 一句错的归因比一句笼统的归因贵得多：它会去查一个无辜的源文件。
      */
-    readonly summary?: string
+    readonly summary?: string,
+    /**
+     * 这行错误对应的**码**（`err.*`）。给了它之后，渲染层就能在切语言时把那行
+     * 重新翻一遍——**没给的那些照旧用 `summary` / `summarize(logTail)`**，一个字不变。
+     *
+     * ⚠️ 给了 `ref` 就必须保证 `tZh(ref.key, ref.params)` 与 `logTail` 的**最后一行**
+     * （也就是卡片上显示的那一行）逐字节相同，否则卡片上的字与日志里的字会对不上。
+     * `test-i18n.ts` 的 [P7] 一节钉着这件事。
+     */
+    readonly ref?: ErrorRef
   ) {
     super(summary ?? '转换失败')
     this.name = 'ConversionFailed'

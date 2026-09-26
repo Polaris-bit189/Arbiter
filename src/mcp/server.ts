@@ -1,6 +1,7 @@
 import { McpServer, type ToolCallback } from '@modelcontextprotocol/sdk/server/mcp.js'
-import type { ToolAnnotations } from '@modelcontextprotocol/sdk/types.js'
 import type { z } from 'zod'
+// 用户可见文案一律走字典（P6）。这一片是 `mcp.server.*`，见 `@shared/i18n/parts/mcpJobs.ts`。
+import { t } from '@shared/i18n'
 import { describeError, failureOf, McpToolError, policyFor } from './errors'
 import { formatsMarkdown, listSupportedFormats } from './formatsView'
 import { inspectFile } from './inspect'
@@ -12,8 +13,10 @@ import { planConversion } from './plan'
 import { makeThumbnail, type Thumbnail } from './thumbnail'
 import { readDocument } from './readDocument'
 import {
+  ACCESS_HINTS,
   AUTO_TARGET,
   MAX_LIST_LIMIT,
+  TOOL_ACCESS,
   TOOL_DESCRIPTIONS,
   TOOL_SCHEMAS,
   type ToolName
@@ -241,10 +244,25 @@ function jobSummary(job: Job): Record<string, unknown> {
 function registerArbiterTool<InputArgs extends z.ZodRawShape>(
   server: McpServer,
   name: ToolName,
-  config: { title: string; inputSchema: InputArgs; annotations?: ToolAnnotations },
+  config: { title: string; inputSchema: InputArgs },
   handler: ToolCallback<InputArgs>
 ): void {
-  server.registerTool(name, { ...config, description: TOOL_DESCRIPTIONS[name] }, handler)
+  // ⚠️ **不要把 `config` 整个 spread 进来**：调用点只该给 `title` 与 `inputSchema`，
+  //    多出来的键会被原样写进工具定义里，而那是一处**没有任何地方会报错**的污染。
+  server.registerTool(
+    name,
+    {
+      title: config.title,
+      inputSchema: config.inputSchema,
+      // `annotations` 与 `description` **都不在调用点**，按 `name` 从 `schema.ts` 取。
+      // 两处都出过「复制了别人的那一份」的错：这里曾经把 `read_document` 的说明书
+      // 发给别的工具，而 `convert_file` 曾经自称 `readOnlyHint: true`（它会写盘）。
+      // 前者靠 `TOOL_DESCRIPTIONS` 的类型钉死，后者靠 `TOOL_ACCESS` 这一层派生。
+      annotations: ACCESS_HINTS[TOOL_ACCESS[name]],
+      description: TOOL_DESCRIPTIONS[name]
+    },
+    handler
+  )
 }
 
 export function createServer(deps: ServerDeps): McpServer {
@@ -256,14 +274,15 @@ export function createServer(deps: ServerDeps): McpServer {
     server,
     'convert_file',
     {
-      title: '转换单个文件',
+      title: t('mcp.server.title.convertFile'),
       // **说明书不在调用点**：`registerArbiterTool` 按 name 从 `TOOL_DESCRIPTIONS` 取。
       // 这里曾经写的是 `TOOL_DESCRIPTIONS.read_document`（最常用的那个工具，说明书
       // 是别人的）——那类错误现在在结构上写不出来，见上面那层包装的注释。
-      inputSchema: TOOL_SCHEMAS.convert_file.shape,
-      // 注释里写清楚为什么：这个工具会长时间占用（转视频可能几分钟），
-      // 客户端据此才知道可以发取消。
-      annotations: { readOnlyHint: true, idempotentHint: true }
+      inputSchema: TOOL_SCHEMAS.convert_file.shape
+      // 这个工具会长时间占用（转视频可能几分钟），客户端据此才知道可以发取消。
+      // ⚠️ 等级是 **`add` 而不是 `read`**：它会往用户的盘上写产物。曾经标成
+      // `readOnlyHint: true`，那等于告诉客户端「可以自动放行」——理由与守卫见
+      // `schema.ts` 的 `TOOL_ACCESS`。
     },
     async (args, extra) => {
       try {
@@ -323,7 +342,9 @@ export function createServer(deps: ServerDeps): McpServer {
                   progress: percent === undefined ? 0 : Math.round(percent),
                   total: 100,
                   message:
-                    current.progress?.kind === 'indeterminate' ? current.progress.stage : '转换中'
+                    current.progress?.kind === 'indeterminate'
+                      ? current.progress.stage
+                      : t('mcp.server.progressConverting')
                 }
               })
               .catch(() => {
@@ -332,7 +353,9 @@ export function createServer(deps: ServerDeps): McpServer {
           }
         })
 
-        if (finished === null) return fail(new McpToolError('这个 job 不见了（内部状态异常）'))
+        if (finished === null) {
+          return fail(new McpToolError(t('mcp.server.jobVanished')))
+        }
         if (finished.status !== 'done') return fail(jobFailure(finished))
 
         const view = jobView(finished)
@@ -356,9 +379,8 @@ export function createServer(deps: ServerDeps): McpServer {
     server,
     'list_supported_formats',
     {
-      title: '列出支持的格式',
-      inputSchema: TOOL_SCHEMAS.list_supported_formats.shape,
-      annotations: { readOnlyHint: true, idempotentHint: true }
+      title: t('mcp.server.title.listFormats'),
+      inputSchema: TOOL_SCHEMAS.list_supported_formats.shape
     },
     async (args) => {
       try {
@@ -375,9 +397,8 @@ export function createServer(deps: ServerDeps): McpServer {
     server,
     'inspect_file',
     {
-      title: '侦察一个文件',
-      inputSchema: TOOL_SCHEMAS.inspect_file.shape,
-      annotations: { readOnlyHint: true, idempotentHint: true }
+      title: t('mcp.server.title.inspectFile'),
+      inputSchema: TOOL_SCHEMAS.inspect_file.shape
     },
     async (args) => {
       try {
@@ -395,9 +416,8 @@ export function createServer(deps: ServerDeps): McpServer {
     server,
     'batch_convert',
     {
-      title: '批量转换',
-      inputSchema: TOOL_SCHEMAS.batch_convert.shape,
-      annotations: { readOnlyHint: false, destructiveHint: false }
+      title: t('mcp.server.title.batchConvert'),
+      inputSchema: TOOL_SCHEMAS.batch_convert.shape
     },
     async (args) => {
       const submitted: Record<string, unknown>[] = []
@@ -458,14 +478,8 @@ export function createServer(deps: ServerDeps): McpServer {
         submitted,
         rejected,
         note: [
-          rejected.length > 0
-            ? '被拒的那些没有入队，每条的 code / next_steps 说明了原因与改法，修好后可以单独再调 batch_convert。'
-            : '全部已入队，用 list_jobs 一次看完整批（status:"failed" 看谁坏了）。',
-          ...(isAuto
-            ? [
-                `target_format 是 "${AUTO_TARGET}"：每条 job 的 to 是**各自**解析出来的实际目标格式，以它为准。`
-              ]
-            : [])
+          rejected.length > 0 ? t('mcp.server.batchRejectedNote') : t('mcp.server.batchQueuedNote'),
+          ...(isAuto ? [t('mcp.server.batchAutoNote', { target: AUTO_TARGET })] : [])
         ].join('')
       })
     }
@@ -477,9 +491,8 @@ export function createServer(deps: ServerDeps): McpServer {
     server,
     'get_job_status',
     {
-      title: '查询任务状态',
-      inputSchema: TOOL_SCHEMAS.get_job_status.shape,
-      annotations: { readOnlyHint: true, idempotentHint: true }
+      title: t('mcp.server.title.getJobStatus'),
+      inputSchema: TOOL_SCHEMAS.get_job_status.shape
     },
     async (args) => {
       const job = deps.registry.get(args.job_id)
@@ -488,7 +501,7 @@ export function createServer(deps: ServerDeps): McpServer {
         // 它能立刻看出「我用错 id 了」而不是「任务丢了」。
         return fail(
           new McpToolError(
-            `没有这个 job：${args.job_id}`,
+            t('mcp.server.unknownJob', { id: args.job_id }),
             { known_job_ids: deps.registry.list().map((j) => j.id) },
             { code: 'unknown_job' }
           )
@@ -504,9 +517,8 @@ export function createServer(deps: ServerDeps): McpServer {
     server,
     'list_jobs',
     {
-      title: '列出任务',
-      inputSchema: TOOL_SCHEMAS.list_jobs.shape,
-      annotations: { readOnlyHint: true, idempotentHint: true }
+      title: t('mcp.server.title.listJobs'),
+      inputSchema: TOOL_SCHEMAS.list_jobs.shape
     },
     async (args) => {
       try {
@@ -523,16 +535,15 @@ export function createServer(deps: ServerDeps): McpServer {
     server,
     'cancel_job',
     {
-      title: '取消任务',
-      inputSchema: TOOL_SCHEMAS.cancel_job.shape,
-      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true }
+      title: t('mcp.server.title.cancelJob'),
+      inputSchema: TOOL_SCHEMAS.cancel_job.shape
     },
     async (args) => {
       const job = deps.registry.cancel(args.job_id)
       if (job === null) {
         return fail(
           new McpToolError(
-            `没有这个 job：${args.job_id}`,
+            t('mcp.server.unknownJob', { id: args.job_id }),
             { known_job_ids: deps.registry.list().map((j) => j.id) },
             { code: 'unknown_job' }
           )
@@ -548,12 +559,11 @@ export function createServer(deps: ServerDeps): McpServer {
     server,
     'read_document',
     {
-      title: '读出文档正文',
+      title: t('mcp.server.title.readDocument'),
       // 它与 `inspect_file` 是**互补**的，不是重叠的：那条回答「这是什么、能转成什么」，
       // 这条把正文直接拿出来。annotation 与 inspect_file 同档——只读、幂等、不动源文件
       // （中间产物落系统临时目录，用完就删）。
-      inputSchema: TOOL_SCHEMAS.read_document.shape,
-      annotations: { readOnlyHint: true, idempotentHint: true }
+      inputSchema: TOOL_SCHEMAS.read_document.shape
     },
     async (args, extra) => {
       try {
@@ -583,10 +593,8 @@ export function createServer(deps: ServerDeps): McpServer {
     'formats',
     'converter://formats',
     {
-      title: '能力矩阵',
-      description:
-        '全部六个大类的转换能力，一张 markdown 表。读一次就知道全局，' +
-        '不必用 list_supported_formats 来回试探。',
+      title: t('mcp.server.resourceTitle'),
+      description: t('mcp.server.resourceDescHead') + t('mcp.server.resourceDescTail'),
       mimeType: 'text/markdown'
     },
     async (uri) => ({
@@ -607,13 +615,13 @@ export function createServer(deps: ServerDeps): McpServer {
 function jobFailure(job: Job): McpToolError {
   if (job.status === 'canceled') {
     return new McpToolError(
-      '这个转换被取消了，没有产物。',
+      t('mcp.server.canceledNoOutput'),
       { job_id: job.id },
       { code: 'canceled' }
     )
   }
   return new McpToolError(
-    job.error ?? '转换失败',
+    job.error ?? t('mcp.server.failed'),
     {
       job_id: job.id,
       ...(job.logTail === undefined ? {} : { log_tail: job.logTail })

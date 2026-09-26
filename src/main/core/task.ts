@@ -11,12 +11,24 @@ import {
   resolveDefaultTarget,
   targetsFor
 } from '@shared/formats'
+import { tZh } from '@shared/i18n'
+import type { ErrorRef } from '@shared/i18n/errors'
 import type { Category, EngineKey, Task, TaskOptions, TaskProgress } from '@shared/types'
 // 「哪几类能裁剪」的判据在 shared 里（界面也要用它来决定显不显示那个面板），
 // 不是这里就地写一个 `category === 'video' || category === 'audio'`——两份判据
 // 分家的表现是「面板显示出来了，设上去却被静默丢掉」。
 import { canTrim } from '@shared/trim'
-import { canFilter, canOutputSize, canUseAction, MAX_FILTER_ACTIONS } from '@shared/options'
+// 阶段文案**同时**产出「码」与「中文兜底」——见 `shared/i18n/stage.ts` 的文件头。
+// 卡片渲染时优先用码（切语言时能重译），而 `stage` 那个字段恒为中文（MCP 线上格式）。
+import { stagePair } from '@shared/i18n/stage'
+import {
+  canFilter,
+  canOutputSize,
+  canUseAction,
+  canUseQuality,
+  MAX_FILTER_ACTIONS,
+  supportsQuality
+} from '@shared/options'
 import type { TaskPatch, TasksPatchMessage } from '@shared/ipc-contract'
 import { CancelToken } from './cancel'
 import { appendHistory } from './history'
@@ -35,7 +47,11 @@ const MAX_TASKS = 500
 
 export interface AddOutcome {
   added: number
-  rejected: { path: string; reason: string }[]
+  /**
+   * 被拒绝的文件与原因。`reason` **恒为中文**（当次生成、当次显示的老路径），
+   * `reasonRef` 是它的**码**——渲染层优先用码，切语言时那行提示跟着变。
+   */
+  rejected: { path: string; reason: string; reasonRef?: ErrorRef }[]
 }
 
 /**
@@ -143,9 +159,9 @@ export class TaskManager {
       // 位置在那条**之前**不是随手排的：两个判据都命中时，引擎未备是更根本的那个——
       // 用户换个不重名的文件照样办不成，先报「目标已存在」会把他引到错的地方去。
       if (getSettings().skipTasksNeedingDownload) {
-        const reason = unavailableEngineReason(fromExt, toExt)
-        if (reason !== null) {
-          rejected.push({ path, reason })
+        const skipped = unavailableEngineReason(fromExt, toExt)
+        if (skipped !== null) {
+          rejected.push({ path, reason: skipped.text, reasonRef: skipped.ref })
           continue
         }
       }
@@ -268,8 +284,9 @@ export class TaskManager {
    * `options` 给 `undefined` = 清空参数。清空之后这条任务与从未设过参数**逐字相同**，
    * 所以下游（引擎、历史、摘要那一行）都不需要认识「空参数」这个第三种状态。
    *
-   * 与 `setTarget` 不同的是**没有「队列条目要跟着改」那一段**：参数不参与并发分桶
-   *（`EngineQueue` 的条目只快照 `engine`），所以这里不必也不该动队列。
+   * 与 `setTarget` **一样**要换掉队列条目，但理由不同：那边是因为换了引擎（分桶的键变了），
+   * 这边是因为编码质量档改变了「这条任务占几份」（慢预设更吃内存）。在那之前参数确实
+   * 不参与分桶，所以这里原本没有那一段——加质量档时它是承重的，见方法末尾那段注释。
    *
    * ⚠️ **回布尔，而 `setTarget` 是 void。** 这个差别是有意的，不是忘了对齐：
    * 这条链路上全是一类「静默不办」（任务不在 / 正在跑 / 这一类不该有这项参数 /
@@ -286,6 +303,7 @@ export class TaskManager {
 
     const trim = options?.trim
     const output = options?.output
+    const quality = options?.quality
     const filters = options?.filters
 
     // 每一项参数只对某些类别有意义。判在**这里**而不只是判在界面上：界面藏起来
@@ -293,7 +311,20 @@ export class TaskManager {
     // 而绕过去的表现是「参数设上了、引擎按另一条分支跑，参数静默失效」。
     if (trim && !canTrim(task.category)) return false
     if (output && !canOutputSize(task.category)) return false
+    if (quality && !canUseQuality(task.category)) return false
     if (filters && filters.length > 0 && !canFilter(task.category)) return false
+
+    // 质量档还要看**出口**，这一步比类别更细：`mp4 → gif` 的源类别是 video，
+    // 而 gif 走调色板滤镜、没有质量旋钮。判据与引擎层共用一个函数（`supportsQuality`），
+    // 两处各写一份的话，漂了的表现是「界面上设得上、转换时才报错」。
+    if (quality && !supportsQuality(task.toExt)) return false
+    // 空对象与「没有质量档」在引擎那一侧行为相同，但在 `TaskOptions` 里一个是占着键的。
+    // 放它进来的话，卡片上会多一句「编码档（未指定）」，历史页也会把这条记成「用过编码档」。
+    if (quality && Object.keys(quality).length === 0) return false
+    // 质量档与体积/码率目标**互斥**（同一条理由见 `shared/options` 的
+    // `QUALITY_OUTPUT_EXCLUSIVE`）。schema 那一道已经拦过 IPC，这里是
+    // 「谁也别想绕过 TaskManager 塞进来一份自相矛盾的参数」的那一道。
+    if (quality && output) return false
 
     // 零长度或反向的区间不是一次裁剪。schema 已经拦过 IPC 那一道，这里是
     // 「谁也别想绕过 TaskManager 塞进来一个坏区间」的那一道（同一个类里 setTarget
@@ -331,12 +362,26 @@ export class TaskManager {
     const next: TaskOptions = {}
     if (trim) next.trim = trim
     if (output) next.output = output
+    if (quality) next.quality = quality
     // 空数组与「没有处理链」是同一个意思，收敛成 `undefined`（照 `trim` 的先例）。
     // 顺手复制一份：任务持有的不该是调用方那个数组的引用。
     if (filters && filters.length > 0) next.filters = [...filters]
 
     task.options = Object.keys(next).length > 0 ? next : undefined
     this.requeue(id, task)
+
+    // ---- 队列里那条记录也要跟着改 ----
+    //
+    // ⚠️ **这一段曾经不存在，而它是编码质量档带进来的**：在那之前「参数不参与并发分桶」
+    // 是对的（队列条目只快照 `engine`），于是 `setOptions` 不必碰队列。而质量档**改变
+    // 了一条任务占几份**（慢预设更吃内存，见 `core/queue.ts` 的 `PRESET_MEMORY_FACTOR`），
+    // 所以现在它必须和 `setTarget` 一样把条目换掉。
+    //
+    // 少了它的表现很隐蔽：一条排队中的任务本来是 3 份、改成 veryslow 之后仍是 3 份，
+    // 于是它在**别的任务眼里**还是轻的——队列会多放进去几条重编码，内存账就此失真。
+    // 反过来「清掉质量档」也走这里，所以两个方向都对得上。位置与 `setTarget` 逐字相同：
+    // `remove` 失败说明它没在等待队列里（跑着或已结束），那就不该 push。
+    if (this.queue.remove(id)) this.queue.push({ id, engine: task.engine, cost: this.costOf(task) })
     return true
   }
 
@@ -404,7 +449,9 @@ export class TaskManager {
    * 引擎的函数。与 `engine` 那个字段同理——队列条目必须跟着任务一起改。
    */
   private costOf(task: Task): number {
-    return taskCost(task.engine, this.inputBytes.get(task.id))
+    // `task.options` 一并发过去：编码质量档改变一条任务占几份（慢预设更吃内存），
+    // 而「几份」的判据只有 `core/queue.ts` 那一份。少传它的话这条任务永远按快档记账。
+    return taskCost(task.engine, this.inputBytes.get(task.id), task.options)
   }
 
   retry(ids: string[]): void {
@@ -516,7 +563,10 @@ export class TaskManager {
     if (needed === null || engineReady(needed)) return
 
     const label = engineLabel(needed)
-    this.setProgress(id, { kind: 'indeterminate', stage: `正在准备 ${label} 引擎…` })
+    this.setProgress(id, {
+      kind: 'indeterminate',
+      ...stagePair({ key: 'stage.engine.preparing', params: { label } })
+    })
 
     const result = await installEngine(needed, {
       cancel: token,
@@ -526,11 +576,14 @@ export class TaskManager {
         this.setProgress(
           id,
           progress.phase === 'extract'
-            ? { kind: 'indeterminate', stage: `正在安装 ${label} 引擎…` }
+            ? {
+                kind: 'indeterminate',
+                ...stagePair({ key: 'stage.engine.installing', params: { label } })
+              }
             : {
                 kind: 'determinate',
                 percent: progress.percent ?? 0,
-                stage: `正在下载 ${label} 引擎…`
+                ...stagePair({ key: 'stage.engine.downloading', params: { label } })
               }
         )
       }
@@ -561,7 +614,7 @@ export class TaskManager {
     task.startedAt = Date.now()
     task.error = undefined
     task.logTail = undefined
-    this.setProgress(id, { kind: 'indeterminate', stage: '准备中…' })
+    this.setProgress(id, { kind: 'indeterminate', ...stagePair({ key: 'stage.preparing' }) })
     this.mark(id, { status: 'running', startedAt: task.startedAt, error: null, logTail: null })
 
     let reserved: string | null = null
@@ -641,6 +694,9 @@ export class TaskManager {
       } else if (error instanceof ConversionFailed) {
         task.status = 'error'
         task.error = error.logTail.length > 0 ? summarize(error.logTail) : error.message
+        // P7：与 `error` 同义的**码**。`throw` 时没给 ref 的那些（今天还是多数）
+        // 这里是 `undefined`，渲染层回落到 `error` —— 那正是 `error` 恒为中文的理由。
+        task.errorRef = error.ref
         task.logTail = error.logTail
         task.progress = null
         task.finishedAt = Date.now()
@@ -648,6 +704,7 @@ export class TaskManager {
         this.mark(id, {
           status: 'error',
           error: task.error,
+          errorRef: task.errorRef,
           logTail: task.logTail,
           progress: null,
           finishedAt: task.finishedAt
@@ -715,6 +772,9 @@ export class TaskManager {
         // 只留 summarize 过的那一行。`logTail` 可能有几百行、含文件内容片段，
         // 让那种东西长期躺在 userData 里没有任何好处。
         error: task.error,
+        // 与 `error` 一起进历史：这是「切了语言之后，**几天前**失败的那条也跟着变」
+        // 的全部依据——`HistoryEntry` 一旦落盘就回不到 `Task` 那边了。
+        errorRef: task.errorRef,
         createdAt: task.createdAt,
         startedAt: task.startedAt,
         finishedAt: task.finishedAt ?? Date.now()
@@ -853,11 +913,19 @@ export class TaskManager {
  * 缓存清一遍（它在关于页有正当理由——用户可能正是刚装完引擎回来看一眼），而这里每拖入
  * 一个文件就要问一次，用它会变成缓存白清、`existsSync` 白跑。`engineReady()` 走的是
  * 各解析器「只探一次、把结果留住」的那条路。
+ *
+ * ⚠️ **文本与码同源**：`text` 是 `tZh(ref)` 现算出来的，不是另写一句。两处分开写的话，
+ * 卡片上那句与 `reasonRef` 渲出来那句迟早会漂——而两句都言之成理，极难归因。
  */
-function unavailableEngineReason(fromExt: string, toExt: string): string | null {
+function unavailableEngineReason(
+  fromExt: string,
+  toExt: string
+): { text: string; ref: ErrorRef } | null {
   const needed = requiresDownload(fromExt, toExt)
   if (needed === null) return null
-  return engineReady(needed) ? null : `需要 ${engineLabel(needed)} 引擎，当前未就绪，按设置已跳过`
+  if (engineReady(needed)) return null
+  const ref: ErrorRef = { key: 'err.engine.notReady', params: { engine: engineLabel(needed) } }
+  return { text: tZh(ref.key, ref.params), ref }
 }
 
 function engineOf(fromExt: string, toExt: string): EngineKey {

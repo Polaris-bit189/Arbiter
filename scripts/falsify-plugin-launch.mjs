@@ -140,7 +140,11 @@ if (process.argv.slice(2).includes('--anchors-only')) {
 
 // ── 跑一轮被测套件，把翻红的断言名抠出来 ──────────────────────────────────────
 function runSuite() {
-  const r = spawnSync(process.execPath, [TEST], { encoding: 'utf8', cwd: ROOT })
+  const r = spawnSync(process.execPath, [TEST], {
+    encoding: 'utf8',
+    cwd: ROOT,
+    maxBuffer: 32 * 1024 * 1024
+  })
   const out = `${r.stdout ?? ''}${r.stderr ?? ''}`
   const red = []
   // ⚠️ 这里的切行必须同时吃掉回车：detail 里带 Windows 堆栈的那些行，

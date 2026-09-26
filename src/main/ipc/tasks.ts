@@ -12,7 +12,9 @@ import {
   type TasksPatchMessage
 } from '@shared/ipc-contract'
 import { extOf, sourceExtsByCategory, targetsFor } from '@shared/formats'
-import { CATEGORIES, type Category } from '@shared/types'
+import { CATEGORIES } from '@shared/types'
+import { t } from '@shared/i18n'
+import { CATEGORY_LABEL } from '@shared/i18n/keys'
 import { TaskManager } from '../core/task'
 import {
   planFolderEnqueue,
@@ -81,7 +83,11 @@ export async function enqueueExternalRequest(request: {
     if (request.to !== null && !targetsFor(from).includes(request.to)) {
       rejected.push({
         path,
-        reason: `.${from} 不能转成 .${request.to}（可选的还有：${targetsFor(from).join(' / ') || '无'}）`
+        reason: t('ipc.reject.cannotConvert', {
+          from,
+          to: request.to,
+          options: targetsFor(from).join(' / ') || t('ipc.reject.noTargets')
+        })
       })
       continue
     }
@@ -121,7 +127,7 @@ export async function applyCliRequest(
   if (parsed.kind === 'none') return
 
   if (parsed.kind === 'error') {
-    await showMessage(parent, '无法识别这次转换请求', parsed.message)
+    await showMessage(parent, t('ipc.dialog.unknownRequest'), parsed.message)
     return
   }
 
@@ -129,7 +135,7 @@ export async function applyCliRequest(
   if (result.rejected.length > 0) {
     await showMessage(
       parent,
-      '这个文件没能加入队列',
+      t('ipc.dialog.enqueueFailed'),
       result.rejected.map((item) => `${item.path}\n${item.reason}`).join('\n\n')
     )
   }
@@ -156,10 +162,10 @@ async function showMessage(
 ): Promise<void> {
   const options = {
     type: 'warning' as const,
-    title: '调律者转换器',
+    title: t('ipc.dialog.appTitle'),
     message: title,
     detail,
-    buttons: ['知道了']
+    buttons: [t('ipc.dialog.ok')]
   }
   if (parent && !parent.isDestroyed()) await dialog.showMessageBox(parent, options)
   else await dialog.showMessageBox(options)
@@ -244,7 +250,7 @@ export function registerTaskIpc(): void {
         name: null,
         sizeBytes: null,
         degradeReason: null,
-        error: '参数非法'
+        error: t('ipc.reject.badPayload')
       }
     }
 
@@ -258,7 +264,7 @@ export function registerTaskIpc(): void {
         name: null,
         sizeBytes: null,
         degradeReason: null,
-        error: '这个任务已不在队列里'
+        error: t('ipc.reject.taskGone')
       }
     }
 
@@ -273,7 +279,7 @@ export function registerTaskIpc(): void {
         name: task.inputName,
         sizeBytes: null,
         degradeReason: null,
-        error: '这个任务还没有产物'
+        error: t('ipc.reject.noOutputYet')
       }
     }
 
@@ -283,7 +289,7 @@ export function registerTaskIpc(): void {
   ipcMain.handle(CH.tasksAdd, async (_event, raw): Promise<AddResult> => {
     const parsed = addPathsSchema.safeParse(raw)
     if (!parsed.success) {
-      return { added: 0, rejected: [{ path: String(raw), reason: '路径参数非法' }] }
+      return { added: 0, rejected: [{ path: String(raw), reason: t('ipc.reject.badPaths') }] }
     }
     return tasks.addPaths(parsed.data)
   })
@@ -380,7 +386,7 @@ export function registerTaskIpc(): void {
    */
   ipcMain.handle(CH.tasksPickFiles, async (event): Promise<AddResult | null> => {
     const result = await openDialog(event, {
-      title: '收入文件',
+      title: t('ipc.dialog.pickFilesTitle'),
       properties: ['openFile', 'multiSelections'],
       filters: sourceFilters()
     })
@@ -393,7 +399,7 @@ export function registerTaskIpc(): void {
 
   ipcMain.handle(CH.tasksPickFolder, async (event): Promise<AddResult | null> => {
     const result = await openDialog(event, {
-      title: '打开文件夹（可选含子文件夹）',
+      title: t('ipc.dialog.pickFolderTitle'),
       properties: ['openDirectory']
     })
     if (result.canceled || result.filePaths.length === 0) return null
@@ -461,7 +467,7 @@ export function registerTaskIpc(): void {
 async function showChoice(window: BrowserWindow | null, prompt: ScanPrompt): Promise<FolderScope> {
   const options = {
     type: 'question' as const,
-    title: '调律者转换器',
+    title: t('ipc.dialog.appTitle'),
     message: prompt.message,
     detail: prompt.detail,
     buttons: prompt.buttons,
@@ -492,22 +498,6 @@ function openDialog(
 }
 
 /**
- * 类别 → 中文名。**只给系统对话框的过滤器当标签用。**
- *
- * 写成 `Record<Category, string>` 而不是普通对象：将来往 `CATEGORIES` 里加一类却忘了
- * 在这里补一行，就直接是编译错误，而不是一个没有标签的空过滤器。
- * 渲染层另有一份同类映射（队列行副标题要用），两边服务的是两个进程，没法共用。
- */
-const CATEGORY_LABEL: Record<Category, string> = {
-  video: '视频',
-  audio: '音频',
-  image: '图片',
-  document: '文档',
-  ebook: '电子书',
-  archive: '压缩包'
-}
-
-/**
  * 文件对话框的扩展名过滤器。
  *
  * **必须传**：不传的话用户在对话框里能选中任何文件（`.exe` / `.dll` / 无扩展名的都行），
@@ -515,6 +505,10 @@ const CATEGORY_LABEL: Record<Category, string> = {
  *
  * 扩展名从 `sourceExtsByCategory()` 现取，不在主进程另抄一份清单：能力矩阵加了新格式，
  * 这里自动跟上。抄一份的下场是「支持了 `.avif`，但文件对话框里选不中它」。
+ *
+ * ⚠️ **组名同样不能在主进程另抄一份**：`CATEGORY_LABEL` 那张表原先在三个进程里各有一份
+ * 副本（渲染层、这里、MCP），三份一起漂的表现是同一个类别在三个地方叫三个名字。现在表
+ * 住在 `@shared/i18n/keys`、值是**字典键**，所以这里要过一层 `t()` 才是给人看的字。
  */
 function sourceFilters(): OpenDialogOptions['filters'] {
   const byCategory = sourceExtsByCategory()
@@ -523,8 +517,8 @@ function sourceFilters(): OpenDialogOptions['filters'] {
   const groups = CATEGORIES.map((category) => {
     const extensions = byCategory[category]
     all.push(...extensions)
-    return { name: CATEGORY_LABEL[category], extensions }
+    return { name: t(CATEGORY_LABEL[category]), extensions }
   })
 
-  return [...groups, { name: '全部支持的格式', extensions: all }]
+  return [...groups, { name: t('ipc.filter.all'), extensions: all }]
 }

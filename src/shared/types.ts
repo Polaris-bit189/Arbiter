@@ -1,3 +1,5 @@
+import type { ErrorRef, LocaleSetting, StageRef } from './i18n/types'
+
 /**
  * 媒体大类。决定 UI 分组、默认目标格式、以及走哪个转换引擎。
  *
@@ -17,7 +19,15 @@ export const ENGINE_KEYS = [
   'pandoc',
   'libreoffice',
   'calibre',
-  'archive'
+  'archive',
+  /**
+   * 加密音乐容器（`.ncm` / `.qmc*` / `.mflac` / `.mgg` / `.kwm` / `.xm`）。
+   *
+   * **它不是一个「解码器」，而是一个「开壳器」**：把外壳剥掉、拿回里面那个真正的
+   * mp3 / flac，然后按需要交给 ffmpeg。所以它与 ffmpeg 是两个引擎，而不是
+   * ffmpeg 的一种输入格式——ffmpeg 根本不认识这些容器。
+   */
+  'encmusic'
 ] as const
 
 export type EngineKey = (typeof ENGINE_KEYS)[number]
@@ -213,6 +223,95 @@ export type FilterAction =
   ResizeAction | DeinterlaceAction | DenoiseAction | SharpenAction | LoudnormAction | RotateAction
 
 /**
+ * 视频编码的速度档。**取值就是 libx264 自己的 `-preset` 名**，不另造一套词汇表——
+ * 造一套就得维护一张「我们的名字 → ffmpeg 的名字」的对应表，而那张表漂了的表现是
+ * 「界面上选的是 slow，命令行上是 veryfast」，没有任何地方会报错。
+ *
+ * 顺序是**从快到慢**，界面直接照这个顺序排；`placebo` 放在最后不是因为它最好，
+ * 而是因为它在实测里是纯代价（见 `docs` 里那张实测表：比 `veryslow` 还慢 2.3 倍，
+ * 体积与 SSIM 都一样）。留着是为了「能选」，界面上会写明它的代价。
+ */
+export const ENCODE_PRESETS = [
+  'ultrafast',
+  'superfast',
+  'veryfast',
+  'faster',
+  'fast',
+  'medium',
+  'slow',
+  'slower',
+  'veryslow',
+  'placebo'
+] as const
+
+export type EncodePreset = (typeof ENCODE_PRESETS)[number]
+
+/**
+ * 调优档（`-tune`）。
+ *
+ * **只收 x264 那八个里语义明确、且用户真的会想要的六个**：
+ *
+ * - `film` / `animation` / `grain` —— 按内容类型调心理视觉模型，这是这一项存在的全部理由
+ * - `stillimage` —— 静图式素材
+ * - `fastdecode` / `zerolatency` —— 不是画质档，是**为下游约束**让路的档
+ *   （前者去掉解码器不爱做的编码工具，后者关掉前瞻与 B 帧）
+ *
+ * ⚠️ **刻意不收 `psnr` / `ssim`**：那两个是「按某个指标最优化」的调试档，
+ * 会让产物在**人眼**看来更差而指标更好看，把它摆进界面等于诱导用户选错。
+ *
+ * ⚠️ **`-tune` 是 x264 独有的**，libvpx / NVENC 都没有同名的东西，所以它只对
+ * `QUALITY_TARGETS` 那几个出口有效（判据见 `@shared/options` 的 `supportsQuality`）。
+ */
+export const ENCODE_TUNES = [
+  'film',
+  'animation',
+  'grain',
+  'stillimage',
+  'fastdecode',
+  'zerolatency'
+] as const
+
+export type EncodeTune = (typeof ENCODE_TUNES)[number]
+
+/**
+ * 编码质量档：恒定质量 + 速度档 + 调优（HandBrake 那个 Video 页的三件套）。
+ *
+ * **三个字段全部可选，一个都不给 = 加这个字段之前的行为**（`-preset veryfast -crf 23`）。
+ * 这一点是刻意的：`TaskOptions` 整体是「替换」语义，而「没设质量档」必须与
+ * 「设了一个空的 quality」区分开——所以空对象由 schema 与 `setOptions` 拒掉。
+ *
+ * ## ⚠️ 同一串参数在别的编码器上不是同一件事
+ *
+ * `-crf` 的同一个数字在 x264 与 NVENC 上**同号不同质**（实测：`-cq 23` 的产物是
+ * `-crf 23` 的 2.8 倍大，见 `engines/ffmpeg.ts` 里那段）。所以这一项与显卡编码
+ * **互斥**：设了质量档就一定走 CPU（`ffmpegRun.ts` 里那条决策，而且会说出来）。
+ *
+ * ## ⚠️ 同一个 CRF 在不同 preset 之间也不是同一个画质（实测）
+ *
+ * 本机实测（真实照片推镜的 640x640 片段，crf 23 固定，3 次取中位）：
+ *
+ * | preset    | 时间  | 体积    | SSIM   |
+ * | --------- | ----- | ------- | ------ |
+ * | ultrafast | 81 ms | 812.6KB | 0.9791 |
+ * | veryfast  | 118ms | 213.4KB | 0.9802 |
+ * | fast      | 171ms | 290.9KB | 0.9861 |
+ * | medium    | 199ms | 259.7KB | 0.9860 |
+ * | veryslow  | 667ms | 233.6KB | 0.9856 |
+ *
+ * **体积不是单调的**（`veryfast` 最小），而 SSIM 是（`veryfast` 最差）。
+ * 所以「换个更慢的预设就能更小」是错的，界面文案不能这么写；
+ * 也**不能**把「预设」与「CRF」当成两个能互相换算的旋钮。
+ */
+export interface QualityOptions {
+  /** 恒定质量。x264 的 `-crf`，0~51，越小越好。省略 = 23（本项目一贯的默认值） */
+  crf?: number
+  /** 编码速度档。省略 = `veryfast`（本项目一贯的默认值） */
+  preset?: EncodePreset
+  /** 调优档。省略 = 不传 `-tune`（x264 自己的默认行为） */
+  tune?: EncodeTune
+}
+
+/**
  * 输出约束：产物体积或码率。
  *
  * **它不是处理链里的一步**，所以在 `TaskOptions` 上与 `filters` 平级而不是数组的一个成员。
@@ -246,6 +345,8 @@ export interface OutputOptions {
  *
  * - `trim`    —— **选一段**（时间区间）。与处理链正交：它不改变像素，只决定取哪一段。
  * - `output`  —— **编码目标**（体积 / 码率）。同样与处理链正交，理由见 `OutputOptions`。
+ * - `quality` —— **编码质量档**（恒定质量 / 速度档 / 调优）。与 `output` **互斥**，
+ *   理由见 `QualityOptions` 与 `@shared/options` 的 `QUALITY_OUTPUT_EXCLUSIVE`。
  * - `filters` —— **改变像素的步骤，有序**。理由见 `FilterAction`。
  *
  * 摊在 `Task` 上（`trimStart` / `trimEnd` / `scaleWidth` …）会把「没有参数」与
@@ -254,10 +355,14 @@ export interface OutputOptions {
  * ⚠️ **整体是「替换」而不是「合并」语义**（`TaskManager.setOptions`）。界面上的每一块
  * 面板在「应用」时都必须交出**完整的** `TaskOptions`（见 `shared/options.ts` 的
  * `withOption`）——各交各的那一个字段的话，第二块面板一应用就会把第一块的静默抹掉。
+ *
+ * ⚠️ **字段的声明顺序 = `describeOptions()` 拼摘要的顺序**，改这里就要改那里：
+ * 同一条任务的参数行在队列卡与历史页上必须逐字相同。
  */
 export interface TaskOptions {
   trim?: TrimOptions
   output?: OutputOptions
+  quality?: QualityOptions
   /** 有序，按数组顺序执行 */
   filters?: FilterAction[]
 }
@@ -268,6 +373,12 @@ export interface TaskOptions {
  *  - 7z 能给出百分比但没有速率
  *  - pandoc / LibreOffice / Calibre 什么都不给，只能报阶段文案
  *  - LibreOffice 批量转换时用「已完成 n/N」做批次级确定进度
+ *
+ * ⚠️ **`stage` 恒为中文，`stageRef` 才是可重译的码**——两者由 `stagePair()` 一次产出，
+ * 不可能漂。为什么不是「只留码」：`stage` 是 **MCP 的线上格式**（`get_job_status` 的
+ * 回话里就有它），也是既有一批断言的比对对象。让它跟着操作系统语言走，等于让
+ * agent 看到的行为面随机器语言变化——那是一条没人会去测的分歧。
+ * 详见 `shared/i18n/stage.ts` 的文件头。
  */
 export type TaskProgress =
   | {
@@ -283,9 +394,11 @@ export type TaskProgress =
        * 用户看到的是一个转了几分钟的进度条而不知道它在干什么。
        */
       stage?: string
+      /** 与 `stage` 同义的**码**。见 `StageRef` 与 `stage.ts` 的文件头 */
+      stageRef?: StageRef
     }
-  | { kind: 'indeterminate'; stage: string; hint?: string }
-  | { kind: 'batch'; done: number; total: number; stage: string }
+  | { kind: 'indeterminate'; stage: string; stageRef?: StageRef; hint?: string }
+  | { kind: 'batch'; done: number; total: number; stage: string; stageRef?: StageRef }
 
 export interface Task {
   id: string
@@ -306,8 +419,10 @@ export interface Task {
   progress: TaskProgress | null
   outputPath?: string
   sizeBytes?: number
-  /** 失败时的简短原因，展示在卡片上 */
+  /** 失败时的简短原因，展示在卡片上。**恒为中文**（`summarize(logTail)` 的结果） */
   error?: string
+  /** 与 `error` 同义的**码**。渲染层优先用它，切语言时跟着变；老任务没有这个字段 */
+  errorRef?: ErrorRef
   /** stderr 尾部若干行，供用户展开排查 */
   logTail?: string[]
   createdAt: number
@@ -372,8 +487,10 @@ export interface HistoryEntry {
   status: HistoryStatus
   outputPath?: string
   sizeBytes?: number
-  /** 只存 summarize 之后的一行，不像 `Task` 那样存 `logTail` */
+  /** 只存 summarize 之后的一行，不像 `Task` 那样存 `logTail`。**恒为中文** */
   error?: string
+  /** 与 `error` 同义的**码**（见 `Task.errorRef`）。它让**几天前**失败的那条也能跟着语言变 */
+  errorRef?: ErrorRef
   createdAt: number
   startedAt?: number
   finishedAt: number
@@ -440,6 +557,14 @@ export interface SettingsCorruption {
 }
 
 export interface Settings {
+  /**
+   * 界面语言。**三态，默认 `'system'`**（跟随操作系统）。
+   *
+   * 类型来自 `./i18n/types`，而不是在这里再写一次 `'system' | 'zh' | 'en'`：
+   * 那份清单同时是 zod 枚举、设置页下拉、以及三个入口声明闸门的输入，
+   * 各写一份迟早漂，而漂的表现是「某个入口不认识某一档，静默按默认值走」。
+   */
+  language: LocaleSetting
   outputDir: string | null
   /** 输出目录留空时写到源文件旁边 */
   outputBesideSource: boolean

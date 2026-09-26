@@ -1,6 +1,7 @@
 import { mkdtemp } from 'fs/promises'
 import { tmpdir } from 'os'
 import { dirname, join } from 'path'
+import { stagePair } from '@shared/i18n/stage'
 import { partPathOf } from '../core/outputName'
 import {
   normalizeEncoding,
@@ -55,11 +56,11 @@ export async function runPandoc(context: ConvertContext): Promise<void> {
 
   try {
     await removeQuietly(tempOut)
-    onProgress({ kind: 'indeterminate', stage: '准备文档…' })
+    onProgress({ kind: 'indeterminate', ...stagePair({ key: 'stage.pandoc.prepare' }) })
 
     const srcPath = await normalizeEncoding(input, fromExt, tempDir)
 
-    onProgress({ kind: 'indeterminate', stage: '转换中…' })
+    onProgress({ kind: 'indeterminate', ...stagePair({ key: 'stage.converting' }) })
 
     await runPandocCli(
       [srcPath, '-f', reader, '-o', tempOut, ...pandocCommonArgs(dirname(input))],
