@@ -1,25 +1,16 @@
-import type { Category } from '@shared/types'
-
 /**
- * 类别 → 中文名。队列行副标题（「MP4 · 视频」）与目标格式下拉的分组标签都读它。
+ * 类别名的**转出口**。
  *
- * **单独成一个文件，而不是挂在某个组件里导出。** 挂在组件文件里会同时踩两件事：
- * 一是 `react-refresh/only-export-components`（组件文件导出非组件会红），
- * 二是循环引用——`TaskCard` 要用它、`TargetFormatSelect` 也要用它，
- * 而 `TaskCard` 又 import 了 `TargetFormatSelect`。
+ * 表的实体住在 `@shared/i18n/keys`——因为 `CATEGORY_LABEL` 原先有三份副本
+ * （这里、主进程的 `main/ipc/tasks.ts`、MCP 的 `formatsView.ts`），而它们服务的是
+ * 三个进程，谁也 import 不到谁。三份一起漂的表现是**同一个类别在界面、在系统文件
+ * 对话框、在 agent 的返回值里叫三个名字**，而没有任何地方会报错。
  *
- * 写成 `Record<Category, string>`：将来往 `CATEGORIES` 里加一类却忘了补这里，
- * 直接是编译错误，而不是界面上冒出一个没有名字的分组。
+ * `src/shared` 是唯一能被三方同时 import 的落点（与 `formatBytes` 同一个理由）。
+ * 这个文件留着是为了让渲染层的六个调用点**一个字都不用改**。
  *
- * 主进程另有一份同名映射（`main/ipc/tasks.ts`），那是给系统文件对话框的过滤器当
- * 标签用的。两边服务的是两个进程，共享不了；两边都写成 `Record<Category, string>`，
- * 所以任何一边漏了类别都会在编译期被抓住。
+ * ⚠️ **值现在是 `KeysOf<'category.'>` 而不是字符串**，所以取词的地方要写
+ * `t(CATEGORY_LABEL[x])`——那一步改变的是类型，而类型让「有一条忘了包 `t()`」
+ * 变成编译错误。
  */
-export const CATEGORY_LABEL: Record<Category, string> = {
-  video: '视频',
-  audio: '音频',
-  image: '图片',
-  document: '文档',
-  ebook: '电子书',
-  archive: '压缩包'
-}
+export { CATEGORY_LABEL } from '@shared/i18n/keys'

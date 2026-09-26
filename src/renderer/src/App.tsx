@@ -1,4 +1,5 @@
 import { useEffect } from 'react'
+import { setLocale, t } from '@shared/i18n'
 import { Sprite } from './components/Sprite'
 import { Toast } from './components/Toast'
 import { TitleBar } from './components/TitleBar'
@@ -7,6 +8,7 @@ import { WorkbenchPage } from './pages/WorkbenchPage'
 import { HistoryPage } from './pages/HistoryPage'
 import { SettingsPage } from './pages/SettingsPage'
 import { AboutPage } from './pages/AboutPage'
+import { htmlLangOf, localeOf } from './lib/locale'
 import { useNav } from './store/useNav'
 import { useTasks } from './store/useTasks'
 import { useHistory } from './store/useHistory'
@@ -19,9 +21,21 @@ import { useEngines } from './store/useEngines'
  *
  * 整页不滚（`main.css` 里 body 已是 `overflow: hidden`），**滚动一律发生在页面区
  * 自己的容器里**——长列表的表头要始终可见、拖拽区不该被滚走，都靠这一条。
+ *
+ * ## 语言切换靠 `key={locale}` 重挂，不重启
+ *
+ * 唯一的那个 `key` 放在**下面那个 shell 根元素**上，整个子树跟着换一次语言。
+ * 这样做的代价是工作台长列表会丢 `scrollTop`——而用户一辈子改一次语言，划算。
+ * 收益是**结构上不可能漏**：把 `key` 放在这里之后，「切了英文还有一半是中文」这件事
+ * 需要有人**特意**把某段文案渲染到这棵树之外才会发生，而那种地方目前一处都没有。
+ *
+ * 为什么不改 URL query：`loadFile` 与 dev 的 `ELECTRON_RENDERER_URL` 是两条 bootstrap
+ * 路径，语言写进 URL 之后，切完语言 F5 整页刷新会**悄悄退回旧语言**。
  */
 function App(): React.JSX.Element {
   const page = useNav((s) => s.page)
+  const settings = useSettings((s) => s.settings)
+  const locale = localeOf(settings)
 
   useEffect(() => {
     // 这两句**必须留在这一层**，不能下移到页面组件里。
@@ -50,36 +64,61 @@ function App(): React.JSX.Element {
     return off
   }, [])
 
+  /**
+   * 把语言推给 `@shared/i18n` 那份全局，并同步三个「界面之外」的标签。
+   *
+   * ⚠️ **`setLocale` 这一句是承重的**：`describeOptions` / `describeTrim` 这些 shared
+   * 里的纯函数在主进程与渲染层**共用同一份实现**，它们读的就是那份全局。少了这一句，
+   * 界面上的参数摘要会一直是中文——而它是用户核对「这条任务按什么参数跑的」的唯一依据。
+   */
+  useEffect(() => {
+    setLocale(locale)
+    document.documentElement.lang = htmlLangOf(locale)
+    document.title = t('app.title')
+  }, [locale])
+
   return (
-    <div className="flex h-screen flex-col overflow-hidden bg-canvas text-fg">
+    // ⚠️ `key={locale}` 是整条 i18n 的**重挂开关**，全仓只此一处。见文件头那段说明。
+    <div key={locale} className="flex h-screen flex-col overflow-hidden bg-canvas text-fg">
       {/* 素材 sprite 全文档只挂一次：logo.svg 里的 <linearGradient id="gGold"> 只能有一份 */}
       <Sprite />
 
-      <TitleBar />
-      <div className="hairline" />
+      {/*
+        ⚠️ **设置到手之前只渲染空壳。**
+        少了这道门控，首帧会用「没设过语言」算出一种语言、设置到手之后立刻翻成另一种，
+        用户看到的是界面闪一下——而 `settings.language` 恰恰是唯一一个「值不同则整棵树
+        都不同」的设置项。窗口底色由 `window.ts` 的 `backgroundColor` 顶着，所以空壳
+        不是一片白。
+      */}
+      {settings !== null && (
+        <>
+          <TitleBar />
+          <div className="hairline" />
 
-      <div className="flex min-h-0 flex-1">
-        <Sidebar />
+          <div className="flex min-h-0 flex-1">
+            <Sidebar />
 
-        <main className="flex min-h-0 min-w-0 flex-1 flex-col">
-          {/*
-            工作台用 hidden 保活而不是卸载：长列表的 scrollTop 一旦卸载就没了，
-            切去「关于」再切回来会发现队列跳回顶部。
-            另外三页反过来——条件渲染、用完整卸载换一份干净的表单状态。
-          */}
-          <div className={page === 'work' ? 'flex min-h-0 flex-1 flex-col' : 'hidden'}>
-            <WorkbenchPage />
+            <main className="flex min-h-0 min-w-0 flex-1 flex-col">
+              {/*
+                工作台用 hidden 保活而不是卸载：长列表的 scrollTop 一旦卸载就没了，
+                切去「关于」再切回来会发现队列跳回顶部。
+                另外三页反过来——条件渲染、用完整卸载换一份干净的表单状态。
+              */}
+              <div className={page === 'work' ? 'flex min-h-0 flex-1 flex-col' : 'hidden'}>
+                <WorkbenchPage />
+              </div>
+
+              {page !== 'work' && (
+                <div className="scroll-dark min-h-0 flex-1 overflow-y-auto">
+                  {page === 'history' && <HistoryPage />}
+                  {page === 'settings' && <SettingsPage />}
+                  {page === 'about' && <AboutPage />}
+                </div>
+              )}
+            </main>
           </div>
-
-          {page !== 'work' && (
-            <div className="scroll-dark min-h-0 flex-1 overflow-y-auto">
-              {page === 'history' && <HistoryPage />}
-              {page === 'settings' && <SettingsPage />}
-              {page === 'about' && <AboutPage />}
-            </div>
-          )}
-        </main>
-      </div>
+        </>
+      )}
 
       {/*
         Toast 宿主只挂这一处，**四个页面都不要各自挂一个**。

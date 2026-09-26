@@ -123,10 +123,20 @@ if (process.argv.slice(2).includes('--anchors-only')) {
  * 表现是「基线就报不是全绿」，倒也不会静默通过，但白跑一整轮。
  */
 function runTests() {
-  const out = spawnSync('npx', ['tsx', 'scripts/test-core.ts'], {
-    encoding: 'utf8',
-    shell: true
-  })
+  // ⚠️ **这条命令必须与 `package.json` 的 `test:core` 一致。**
+  // 这里原先漏了 `--tsconfig tsconfig.test.json`，而 `test-core.ts` 的依赖里已经有
+  // `@shared/*` 的**值导入**——少了它，tsx 在加载期就 `Cannot find module`、一秒内退出、
+  // 一行汇总行都没有，于是基线报 `通过 -1`。那正是 CI 上 `Falsification` 从
+  // 2026-09-17 起一直红着的原因，而且**零输出**，看日志根本无从查起。
+  const out = spawnSync(
+    'npx',
+    ['tsx', '--tsconfig', 'tsconfig.test.json', 'scripts/test-core.ts'],
+    {
+      encoding: 'utf8',
+      shell: true,
+      maxBuffer: 32 * 1024 * 1024
+    }
+  )
   const text = out.stdout + out.stderr
   const reds = text
     .split(/\r?\n/)

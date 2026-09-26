@@ -51,8 +51,15 @@ import { resolve } from 'path'
 import { pathToFileURL } from 'url'
 import { createElement, isValidElement, type ReactElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { filterActionSchema } from '@shared/ipc-contract'
-import { MAX_FILTER_ACTIONS, MAX_IMAGE_DIM, MIN_IMAGE_DIM } from '@shared/options'
+import { filterActionSchema, qualitySchema, setOptionsSchema } from '@shared/ipc-contract'
+import {
+  DEFAULT_CRF,
+  DEFAULT_PRESET,
+  MAX_FILTER_ACTIONS,
+  MAX_IMAGE_DIM,
+  MIN_IMAGE_DIM,
+  QUALITY_OUTPUT_EXCLUSIVE
+} from '@shared/options'
 // ⚠️ 这四个住在 `types.ts`，不在 `options.ts` 里。写错文件名的后果**不是编译错误**：
 // 经 CJS interop 取不到的名字是 `undefined`，于是 `${MIN_SHARPEN}` 安静地变成
 // `"undefined"`、`MIN_SHARPEN / 2` 变成 `NaN`，只有断言的文案会变得莫名其妙
@@ -155,13 +162,25 @@ const EXPORTS = [
  *   刚好躲开 `^\.\/OptionsSection$` 这个过滤条件，于是它解析到真的那个文件——
  *   外壳（标题 + 错误行 + 应用/清除按钮）**仍然是盘上那份 `OptionsSection.tsx` 渲染的**。
  */
-function panelPlugin(original: string): import('esbuild').Plugin {
+function panelPlugin(
+  original: string,
+  fileName: string,
+  exports: string[],
+  target: string
+): import('esbuild').Plugin {
   return {
     name: 'panel-source-tap',
     setup(b) {
-      b.onResolve({ filter: /^@shared\// }, (args) => ({
-        path: resolve(ROOT, 'src/shared', args.path.slice('@shared/'.length) + '.ts')
-      }))
+      // ⚠️ **别名解析要认目录**：`@shared/i18n` 是一个**目录**（P1 起），
+      // 而原先那句一律拼 `.ts`，于是 esbuild 报
+      // `Cannot read file: …\src\shared\i18n.ts` —— 整个套件**一条都跑不起来**。
+      // 这不是「某个断言红了」，是「套件不存在」：而一个跑不起来的套件看起来
+      // 与一个全绿的套件一样安静。
+      b.onResolve({ filter: /^@shared\// }, (args) => {
+        const base = resolve(ROOT, 'src/shared', args.path.slice('@shared/'.length))
+        const flat = `${base}.ts`
+        return { path: existsSync(flat) ? flat : resolve(base, 'index.ts') }
+      })
 
       b.onResolve({ filter: /^\.\/OptionsSection$/ }, () => ({
         path: 'options-tap',
@@ -197,13 +216,16 @@ function panelPlugin(original: string): import('esbuild').Plugin {
       }))
 
       // 被测文件本身：**原文 + 一行导出**，其余一个字节不改。
-      b.onLoad({ filter: /FiltersSection\.tsx$/ }, (args) => {
+      b.onLoad({ filter: new RegExp(`${fileName.replace('.', '\\.')}$`) }, (args) => {
         const same =
           resolve(args.path).replace(/\\/g, '/').toLowerCase() ===
-          PANEL.replace(/\\/g, '/').toLowerCase()
+          target.toLowerCase().replace(/\\/g, '/')
         if (!same) return undefined
+        // ⚠️ `exports` 为空时**不能**拼出 `export { }`（那是语法错误），而重复导出
+        // 一个源码里本来就导出的名字（`QualitySection` 就是这种）会直接构建失败。
+        // 所以那一行只在**有额外要捞的内部名字**时才追加。
         const trailer =
-          `\nexport { ${EXPORTS.join(', ')} }\n` +
+          (exports.length > 0 ? `\nexport { ${exports.join(', ')} }\n` : '\n') +
           `export { __taps } from './OptionsSection'\n` +
           `export { __store } from '../../store/useTasks'\n`
         return { contents: original + trailer, loader: 'tsx', resolveDir: OPTIONS_DIR }
@@ -212,12 +234,21 @@ function panelPlugin(original: string): import('esbuild').Plugin {
   }
 }
 
-async function loadPanel(): Promise<PanelModule> {
+/**
+ * 把一个**参数面板**的原文包成模块并加载。
+ *
+ * 两个面板共用这一套：探针（`./OptionsSection` 的 props 与 `../../store/useTasks` 的
+ * `setOptions` 调用）是它们共同的两个对外边界，所以什么都不用改。
+ * 各面板自己的 `exports` 那一行是**锚点**：谁把导出的东西改名或搬走，
+ * ESM 链接期就会抛，而不是让套件悄悄退化成「一条都不跑还全绿」。
+ */
+async function loadPanelModule<T>(fileName: string, exports: string[], what: string): Promise<T> {
   await rm(TMP, { recursive: true, force: true })
   await mkdir(TMP, { recursive: true })
-  const outfile = resolve(TMP, 'panel.mjs')
+  const target = resolve(OPTIONS_DIR, fileName)
+  const outfile = resolve(TMP, `${fileName}.mjs`)
   await build({
-    entryPoints: [PANEL],
+    entryPoints: [target],
     outfile,
     bundle: true,
     platform: 'node',
@@ -228,17 +259,20 @@ async function loadPanel(): Promise<PanelModule> {
     // 而且 React **必须**和测试这一侧是同一个实例，否则 `createElement` 造出来的元素
     // 对面不认识（两个 React 实例的表现是一堆莫名其妙的 hook 报错）。
     packages: 'external',
-    plugins: [panelPlugin(readFileSync(PANEL, 'utf8'))],
+    plugins: [panelPlugin(readFileSync(target, 'utf8'), fileName, exports, target)],
     logLevel: 'warning'
   })
   try {
-    return (await import(pathToFileURL(outfile).href)) as PanelModule
+    return (await import(pathToFileURL(outfile).href)) as T
   } catch (error) {
-    console.error(`\n从 FiltersSection.tsx 里取不到这些导出：${EXPORTS.join(', ')}`)
-    console.error('（面板的纯逻辑被改名或搬走了？请更新 test-ui.ts 里的 EXPORTS）\n')
+    console.error(`\n从 ${fileName} 里取不到这些导出：${exports.join(', ')}`)
+    console.error(`（${what}的导出被改名或搬走了？请更新 test-ui.ts 里的导出清单）\n`)
     throw error
   }
 }
+
+const loadPanel = (): Promise<PanelModule> =>
+  loadPanelModule<PanelModule>('FiltersSection.tsx', EXPORTS, '处理链面板')
 
 /* ------------------------------------------------------------------ 断言 */
 
@@ -336,6 +370,21 @@ function errorLines(html: string): string[] {
 
 const summariesOf = (html: string): string[] => elements(html, 'span').map((s) => s.text)
 
+/**
+ * **自闭合**标签（`<input … />`）——`elements()` 要求有闭合标签，对 void 元素一条都找不到。
+ *
+ * 这个坑很安静：`elements(html, 'input')` 返回空数组，于是「输入框的初值对不对」
+ * 这类断言拿到的 `undefined` 看起来像「值没渲染出来」，而不是「选择器选不到东西」。
+ * 所以判据里凡是读 `input` 的，都必须走这里。
+ */
+function voidElements(html: string, tag: string): El[] {
+  const out: El[] = []
+  const re = new RegExp(`<${tag}\\b([^>]*?)/?>`, 'g')
+  let m: RegExpExecArray | null
+  while ((m = re.exec(html)) !== null) out.push({ tag, attrs: parseAttrs(m[1]), text: '' })
+  return out
+}
+
 /* ------------------------------------------------------------------ 夹具与驱动 */
 
 let panel!: PanelModule
@@ -395,6 +444,71 @@ async function applyAndCapture(task: Task): Promise<{
   rendered.props.onApply()
   await new Promise((done) => setTimeout(done, 0))
   return { calls: panel.__store.calls, props: rendered.props }
+}
+
+/* ------------------------------------------- 第二块面板：编码质量档（P0-10） */
+
+/**
+ * 质量档面板与处理链面板**共用同一套探针**：两者对外的边界完全一样
+ * （`./OptionsSection` 的 props + `store.setOptions` 的载荷），所以
+ * `panelPlugin` / `loadPanelModule` 一行都不用改。
+ *
+ * ## 这一节能覆盖什么、覆盖不到什么
+ *
+ * SSR 是一次性的，**键盘事件够不着**，所以「用户在 CRF 输入框里敲了个 `abc` 会怎样」
+ * 这一条**没有断言**（处理链面板那支文件头也记着同一条限制）。这一节能覆盖的是
+ * 三个真正会影响用户结果的位点：
+ *
+ * 1. **面板在该禁用的时候禁用，并把理由说出来**（出口不支持 / 与输出约束冲突）——
+ *    这两条的理由都是**从任务状态算出来的**，不需要键盘事件。
+ * 2. **交出去的载荷是完整的**：`setOptions` 是整体替换语义，只交 `quality` 会把用户
+ *    先前设好的裁剪静默抹掉。这一条只有真跑一次 `onApply` 才看得见。
+ * 3. **载荷能过契约**（`qualitySchema` + `setOptionsSchema`）——界面上放行一个主进程
+ *    会拒掉的值，表现是「点了应用什么都没发生」，而那个组合极难靠肉眼发现。
+ */
+interface QualityPanelModule {
+  QualitySection: (props: { task: Task }) => ReactElement
+  __taps: TapProps[]
+  __store: {
+    calls: [string, TaskOptions | null][]
+    ok: boolean
+  }
+}
+
+let qualityPanel!: QualityPanelModule
+
+function renderQuality(task: Task): Rendered {
+  qualityPanel.__taps.length = 0
+  qualityPanel.__store.calls.length = 0
+  qualityPanel.__store.ok = true
+  const html = renderToStaticMarkup(createElement(qualityPanel.QualitySection, { task }))
+  return { html, props: qualityPanel.__taps[0] }
+}
+
+/**
+ * 点一次「应用」（或 `'clear'` 时点「清除」），把交出去的载荷收回来。
+ *
+ * ⚠️ 两者**必须能分开点**：第一版里「清除」那一节错手调了 `onApply`，
+ * 于是量到的是「应用」交出的载荷——而它当然带着 quality，断言红的，
+ * 看起来像「清除没生效」。按钮点错在渲染测试里不算罕见，所以这里做成一个参数。
+ */
+async function applyQualityAndCapture(
+  task: Task,
+  which: 'apply' | 'clear' = 'apply'
+): Promise<{
+  calls: [string, TaskOptions | null][]
+  props: TapProps
+}> {
+  const rendered = renderQuality(task)
+  if (which === 'apply') rendered.props.onApply()
+  else rendered.props.onClear()
+  await new Promise((done) => setTimeout(done, 0))
+  return { calls: qualityPanel.__store.calls, props: rendered.props }
+}
+
+/** 造一条视频任务，可改目标格式与参数。`fromExt` 固定 mp4（`engineFor` 那一路是 ffmpeg）。 */
+function qualityTask(toExt: string, options?: TaskOptions): Task {
+  return { ...makeTask('video', options), toExt }
 }
 
 /* ------------------------------------------------------------------ 元素树 */
@@ -1227,14 +1341,175 @@ const TAUTOLOGY_LABEL = '[对照] 恒真断言（ARBITER_UI_TAUTOLOGY=1 时才�
 
 /* ------------------------------------------------------------------ 主流程 */
 
+/* -------------------------------------------------- [11] 编码质量档面板 */
+
+async function testQualityPanel(): Promise<void> {
+  console.log('\n[11] 编码质量档面板（真渲染）')
+
+  const applyBtn = (html: string): El | undefined => buttonByText(html, '应用')
+  const crfInput = (html: string): El | undefined =>
+    voidElements(html, 'input').find((i) => i.attrs['aria-label'] === '恒定质量 CRF')
+
+  // ---- 1. 正常状态：可应用、没有理由、没有「清除」 ----
+  const plain = renderQuality(qualityTask('mkv'))
+  check('正常：可应用（reason 为 null）', plain.props.reason === null, String(plain.props.reason))
+  check(
+    '正常：「应用」按钮可用',
+    applyBtn(plain.html) !== undefined && !isDisabled(applyBtn(plain.html)!)
+  )
+  check(
+    '正常：没设过质量档时不显示「清除」（点了不会发生任何事的按钮比没有更糟）',
+    !plain.props.canClear
+  )
+  check(
+    '正常：CRF 输入框的初值是引擎的默认值（不是留空——留空会被当成 0，那是最差的一档）',
+    crfInput(plain.html)?.attrs.value === String(DEFAULT_CRF),
+    String(crfInput(plain.html)?.attrs.value)
+  )
+  check(
+    '正常：速度档的初值是引擎的默认值',
+    elements(plain.html, 'option').some(
+      (o) => o.attrs.value === DEFAULT_PRESET && o.attrs.selected !== undefined
+    ),
+    elements(plain.html, 'option')
+      .map((o) => `${o.attrs.value}${o.attrs.selected !== undefined ? '*' : ''}`)
+      .join(',')
+  )
+  check(
+    '正常：两个下拉里的档位与常量数组一致（ENCODE_PRESETS 10 档 + 调优 6 档 + 一个「不调优」）',
+    elements(plain.html, 'option').length >= 17,
+    String(elements(plain.html, 'option').length)
+  )
+
+  // ---- 2. 设过质量档：回填 + 出现「清除」 ----
+  const filled = renderQuality(
+    qualityTask('mkv', { quality: { crf: 30, preset: 'slow', tune: 'film' } })
+  )
+  check(
+    '回填：CRF 从已设值读出来（不是永远显示默认值）',
+    crfInput(filled.html)?.attrs.value === '30'
+  )
+  check(
+    '回填：已设过时显示「清除」',
+    filled.props.canClear && buttonByText(filled.html, '清除') !== undefined
+  )
+
+  // ---- 3. 与输出约束冲突：禁用 + 用**同一句常量**说清理由 ----
+  const conflict = renderQuality(qualityTask('mkv', { output: { targetBytes: 10 * 1024 * 1024 } }))
+  check(
+    '⭐ 冲突：设了体积/码率目标时「应用」被禁用',
+    applyBtn(conflict.html) !== undefined && isDisabled(applyBtn(conflict.html)!)
+  )
+  check(
+    '⭐ 冲突：理由用的是 `QUALITY_OUTPUT_EXCLUSIVE` 那一句（与引擎抛出的是同一句话）',
+    conflict.props.reason === QUALITY_OUTPUT_EXCLUSIVE,
+    String(conflict.props.reason)
+  )
+  check(
+    '冲突：那句话确实渲染到了界面上（不只是一个 props）',
+    errorLines(conflict.html).includes(QUALITY_OUTPUT_EXCLUSIVE),
+    errorLines(conflict.html).join(' | ')
+  )
+
+  // ---- 4. 出口不支持：禁用 + 说清楚是哪个出口、为什么 ----
+  const webm = renderQuality(qualityTask('webm'))
+  check(
+    '出口：目标改成 webm 时「应用」被禁用',
+    applyBtn(webm.html) !== undefined && isDisabled(applyBtn(webm.html)!)
+  )
+  check(
+    '出口：理由点到了 VP9 与「另一条尺子」（不是一句「不支持」）',
+    (webm.props.reason ?? '').includes('VP9'),
+    String(webm.props.reason)
+  )
+  const gif = renderQuality(qualityTask('gif'))
+  check(
+    '出口：gif 的理由说的是调色板滤镜（两种出口的原因不同，不能共用一句话）',
+    (gif.props.reason ?? '').includes('调色板'),
+    String(gif.props.reason)
+  )
+  // 反装饰性：三条「禁用」必须**不是**同一个渲染产物——否则 isDisabled 恒真的话
+  // 上面三节全是绿的。这里断「不冲突的那一条确实没被禁用」。
+  check(
+    '⭐ 反装饰：不冲突的那一条确实**没有** disabled（否则上面三条「被禁用」恒真）',
+    applyBtn(plain.html) !== undefined && !isDisabled(applyBtn(plain.html)!)
+  )
+
+  // ---- 5. 载荷：完整、能过契约、不给空值 ----
+  const withTrim: TaskOptions = { trim: { start: 1, end: 5, mode: 'exact' } }
+  const submitted = await applyQualityAndCapture(qualityTask('mkv', withTrim))
+  check('载荷：调用了一次 setOptions', submitted.calls.length === 1, String(submitted.calls.length))
+  const payload = submitted.calls[0]?.[1] ?? null
+  check(
+    '⭐ 载荷：**先前设好的裁剪还在**（`setOptions` 是整体替换，只交 quality 会把它静默抹掉）',
+    payload?.trim?.start === 1 && payload?.trim?.end === 5 && payload?.trim?.mode === 'exact',
+    JSON.stringify(payload)
+  )
+  check(
+    '载荷：质量档三项都在，且 CRF 是**数字**（字符串会被 zod 拒，而界面上一声不吭）',
+    payload?.quality?.crf === DEFAULT_CRF &&
+      payload?.quality?.preset === DEFAULT_PRESET &&
+      typeof payload?.quality?.crf === 'number',
+    JSON.stringify(payload?.quality)
+  )
+  check(
+    '⭐ 载荷：调优选「不调优」时**不交这个键**（交出空串会被 schema 拒，用户看到的是「点了没反应」）',
+    payload?.quality !== undefined && !('tune' in payload.quality),
+    JSON.stringify(payload?.quality)
+  )
+  check(
+    '⭐ 载荷能过契约：qualitySchema 收得下',
+    payload?.quality !== undefined && qualitySchema.safeParse(payload.quality).success,
+    JSON.stringify(payload?.quality)
+  )
+  check(
+    '⭐ 载荷能过契约：整个 setOptions 载荷收得下（界面放行了一个主进程会拒的值 = 点了没反应）',
+    payload !== null && setOptionsSchema.safeParse({ id: 't-ui', options: payload }).success
+  )
+
+  // ---- 6. 「清除」交出的是「没有质量档」，而不是一个空对象 ----
+  const cleared = await applyQualityAndCapture(
+    qualityTask('mkv', { quality: { crf: 30 }, trim: withTrim.trim }),
+    'clear'
+  )
+  const clearPayload = cleared.calls[0]?.[1] ?? null
+  check(
+    '清除：quality 整个消失，而裁剪仍然留着（清除只该动它自己那一项）',
+    clearPayload !== null && clearPayload.quality === undefined && clearPayload.trim !== undefined,
+    JSON.stringify(clearPayload)
+  )
+  check(
+    '清除：载荷仍然能过契约（`{ trim }` 而不是 `{ trim, quality: {} }`）',
+    clearPayload !== null &&
+      setOptionsSchema.safeParse({ id: 't-ui', options: clearPayload }).success,
+    JSON.stringify(clearPayload)
+  )
+}
+
 async function main(): Promise<void> {
   if (!existsSync(PANEL)) {
     console.error(`找不到 ${PANEL} —— 请在仓库根目录下运行这支套件。`)
     process.exit(1)
   }
 
-  console.log('=== 处理链面板（FiltersSection）回归网 ===')
+  console.log('=== 参数面板回归网（处理链 + 编码质量档）===')
+  // ⚠️ 顺序有讲究：两块面板各自 bundle 一次到**同一个临时目录**，而
+  // `loadPanelModule` 开头会 `rm -rf` 那个目录。所以第二块必须等第一块的模块
+  // 已经 `import` 进来之后再加载——先 load 两个再跑测试的话，后加载的会把前一个
+  // 的 bundle 文件删掉，而 ESM 的模块图已经建好了，症状是「跑起来没事，跑一半找不到文件」。
   panel = await loadPanel()
+  qualityPanel = await loadPanelModule<QualityPanelModule>(
+    'QualitySection.tsx',
+    [],
+    '编码质量档面板'
+  )
+  // 锚点：`QualitySection` 是源码本来就导出的那个名字（不像处理链面板要捞内部函数），
+  // 所以「改名了」不会在构建期被发现——改成**在这里当场撞一下**。
+  // 少了它，改名之后 `createElement(undefined, …)` 会抛一句与改名毫无关系的 React 报错。
+  if (typeof qualityPanel.QualitySection !== 'function') {
+    console.error('\nQualitySection.tsx 里找不到导出的 `QualitySection`（改名或搬走了？）\n')
+    process.exit(1)
+  }
 
   testParse()
   testCompileAndSchema()
@@ -1246,6 +1521,7 @@ async function main(): Promise<void> {
   await testRenderSubmit()
   testWidgetWiring()
   testAntiDecoration()
+  await testQualityPanel()
 
   if (process.env.ARBITER_UI_TAUTOLOGY === '1') check(TAUTOLOGY_LABEL, true)
 

@@ -1,7 +1,8 @@
 {
   "name": "arbiter",
-  "version": "0.3.2",
-  "description": "Arbiter（调律者转换器）的 MCP 工具与斜杠命令：视频 / 音频 / 图片 / 文档 / 电子书 / 压缩包互转。插件本身不含引擎，它借用本机已安装的 Arbiter 应用。",
+  "displayName": "Arbiter — File Converter · 本地文件转换器",
+  "version": "0.3.6",
+  "description": "MCP tools and slash commands for Arbiter, a local file converter: video, audio, image, document, ebook and archive. The plugin ships no engines — it drives the Arbiter app already installed on your machine, so it stays in step with whatever version you have. Arbiter（调律者转换器）的 MCP 工具与斜杠命令：视频 / 音频 / 图片 / 文档 / 电子书 / 压缩包互转。插件本身不含引擎，它借用本机已安装的 Arbiter 应用。",
   "author": {
     "name": "Polaris"
   },

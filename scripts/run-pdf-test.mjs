@@ -13,6 +13,7 @@
  */
 import { build } from 'esbuild'
 import { spawn } from 'child_process'
+import { existsSync } from 'fs'
 import { mkdir, rm } from 'fs/promises'
 import { createRequire } from 'module'
 import { resolve } from 'path'
@@ -29,9 +30,17 @@ const ENTRY = resolve(TMP, 'entry.cjs')
 const sharedAlias = {
   name: 'shared-alias',
   setup(b) {
-    b.onResolve({ filter: /^@shared\// }, (args) => ({
-      path: resolve('src/shared', args.path.slice('@shared/'.length) + '.ts')
-    }))
+    // ⚠️ **别名解析要认目录**：`@shared/i18n` 是一个**目录**（P1 起），而原先那句一律拼
+    // `.ts`，于是 esbuild 报 `Cannot read file: …\src\shared\i18n.ts` —— 整个套件**一条都
+    // 跑不起来**。这不是「某条断言红了」，是「套件不存在」。
+    // ⚠️ 更贵的是：`npm run test` 是一条 `&&` 链，它挂在 `test:pdf` 上时，
+    // **排在它后面的 i18n / audit / encmusic / preload-imports / anchors 一套都没跑**——
+    // 与约束 34 记的那个坑逐字同形。同一个修法在 `scripts/test-ui.ts` 里也有一份（先撞的）。
+    b.onResolve({ filter: /^@shared\// }, (args) => {
+      const base = resolve('src/shared', args.path.slice('@shared/'.length))
+      const flat = `${base}.ts`
+      return { path: existsSync(flat) ? flat : resolve(base, 'index.ts') }
+    })
   }
 }
 

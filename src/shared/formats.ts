@@ -46,7 +46,54 @@ register('video', [
   '3gp',
   'm2ts'
 ])
-register('audio', ['mp3', 'wav', 'flac', 'aac', 'm4a', 'ogg', 'opus', 'wma', 'aiff', 'aif'])
+/**
+ * 加密音乐容器。
+ *
+ * 它们**是音频源**（登记在 audio 类里，目标格式与默认目标都照音频走），但
+ * 「把壳打开」那一步是另一件事，所以 `engineFor` 把它们路由到 `encmusic`。
+ *
+ * ⚠️ **这份名单必须与 `converters/encmusic/containers.ts` 里真正实现的那几个容器
+ * 一一对应。** 登记一个还没实现的扩展名，表现是「界面上能选、拖进去报一句莫名其妙的错」；
+ * 反过来实现了一个没登记的，则是「这个文件根本不被认作可转换的源」。
+ * 两头都是静默的，所以名单只此一份，两边都从这里读（容器那边自己不做判断）。
+ *
+ * ⚠️ **`.kgm` / `.kgma`（酷狗）刻意还没登记**：它的逐字节掩码表我们没能从可达的源
+ * 里取到（GitHub 直连不通，npm 上那个包是 WASM、表在二进制里）。与其登记一个必然失败的
+ * 扩展名，不如让它**不被认出来**——后者用户一眼就知道「这个格式还不支持」。
+ */
+export const ENC_MUSIC_SRC = new Set([
+  'ncm',
+  'qmc0',
+  'qmc2',
+  'qmc3',
+  'qmcflac',
+  'qmcogg',
+  'mflac',
+  'mflac0',
+  'mgg',
+  'mgg1',
+  'mggl',
+  'kwm',
+  'xm'
+])
+
+register('audio', [
+  'mp3',
+  'wav',
+  'flac',
+  'aac',
+  'm4a',
+  'ogg',
+  'opus',
+  'wma',
+  'aiff',
+  'aif',
+  // —— 各家音乐 App 的加密容器（见 ENC_MUSIC_SRC）——
+  //
+  // 它们登记在**音频类**里，所以目标格式列表、默认目标、界面分组全部照音频那一套走
+  // ——这是对的：容器里装的就是音频。
+  ...ENC_MUSIC_SRC
+])
 register('image', [
   'png',
   'jpg',
@@ -290,8 +337,12 @@ export function engineFor(fromExt: string, toExt: string): EngineKey | null {
 
   switch (category) {
     case 'video':
-    case 'audio':
       return 'ffmpeg'
+
+    case 'audio':
+      // 加密容器要先开壳再谈转码，所以那一步不走 ffmpeg。**别把这一条并回上面**：
+      // 并回去的表现是 ffmpeg 拿到一个它不认识的容器，报一句与用户无关的错。
+      return ENC_MUSIC_SRC.has(from) ? 'encmusic' : 'ffmpeg'
 
     case 'image': {
       // sharp 写不出 PDF，交给 Chromium 把图片排版成页面

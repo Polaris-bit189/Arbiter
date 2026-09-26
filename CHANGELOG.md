@@ -5,6 +5,130 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.6] - 2026-09-26
+
+### Added
+
+- **The interface speaks English now — and so do the MCP server, the CLI and the
+  Claude Code plugin.** Settings → 界面语言 switches between Chinese and English,
+  and it takes effect immediately: a task that is already running flips its status
+  line with it, because stage text travels as a **key** rather than as a finished
+  sentence. Agents get the same treatment — tool descriptions, an error's
+  `next_steps`, and the plugin's own messages all follow the same setting, so what
+  an agent quotes back to you is in your language.
+
+  **界面现在说英文了——MCP server、命令行与 Claude Code 插件也一样。**
+  设置 → 界面语言可以在中英之间切换，**立即生效**：正在跑的任务，它那行状态
+  文字也跟着翻，因为阶段文案传的是**码**而不是一句成品句子。给 agent 那一面
+  同理——工具说明书、错误的 `next_steps`、插件自己说的话，跟的都是同一个设置。
+
+  One gap, stated plainly: **failure reasons recorded before 0.3.6 stay Chinese.**
+  That line was written down at the moment the conversion failed. Reasons recorded
+  from this version onward follow the language setting; older history entries do not
+  get re-translated.
+
+  一处如实说明的残留：**0.3.6 之前**记下的失败原因仍是中文——那行字在失败那一刻
+  就写死了。这一版起新产生的失败原因跟着语言走；更早的历史条目不会被追溯翻译。
+
+- **The plugin can check for updates.** `/arbiter:update` compares both the
+  installed app and the plugin against the latest release, reports which side is
+  behind, and with `--download` fetches the installer into your downloads folder.
+
+  **插件现在会查更新了。** `/arbiter:update` 会把**应用与插件两边**都与最新
+  release 比一遍、报出哪边旧了；加 `--download` 会把安装包下到下载目录。
+
+  It deliberately **does not install anything** — running the installer stays the
+  user's call, and the two commands that update the plugin are printed for them to
+  run (a restart of Claude Code is needed afterwards). It also keeps *"could not
+  check"* apart from *"already up to date"*: those are different answers, and
+  collapsing them into one would tell the user they are current when nobody knows.
+
+  它刻意**不安装任何东西**——装不装由用户决定，更新插件那两条命令是打出来给
+  用户自己跑的（跑完要重启 Claude Code）。它还把「**没查成**」与「**已经是最新**」
+  分得很开：那是两个不同的答案，合成一个等于在没人知道的时候告诉用户「你已经是最新的」。
+
+## [0.3.5] - 2026-09-17
+
+### Added
+
+- **Encrypted music containers can be converted.** NetEase `.ncm`, QQ Music
+  `.qmc0/.qmc2/.qmc3/.qmcflac/.qmcogg`,`.mflac/.mflac0/.mgg/.mgg1/.mggl`, Kuwo
+  `.kwm` and Xiami `.xm` are unpacked and handled like any other audio source:
+  pick a target format and it decrypts, then transcodes only if it has to. If the
+  audio inside is already what you asked for, the file is written out without going
+  through an encoder at all.
+
+  **加密音乐容器现在可以转换了。** 网易云 `.ncm`、QQ 音乐 `.qmc*/mflac/mgg`、
+  酷我 `.kwm`、虾米 `.xm` 会先被解开，然后像普通音频源一样处理：选目标格式，
+  需要转码才转码。**里面本来就是你要的那个格式时，产物一个字节都不经过编码器。**
+
+  Two things are worth saying plainly. **The container a file is in does not tell you
+  what is inside it** — the format is decided by the magic bytes of the decrypted
+  audio, not by what the app recorded in its metadata, so a mislabelled file still
+  lands on the right encoder. And **this is not a decryption tool**: it converts the
+  files you already have, writes the result next to them, and never touches the
+  original.
+
+  两点要说在明面上：**容器不告诉你里面是什么**——格式由解出来的字节判定，而不是
+  信 App 写在元数据里的那个字段，所以标错的文件也能落到对的编码器上；
+  以及**这不是一个破解工具**：它只转你已有的文件，产物写在旁边，源文件一个字节不动。
+
+  Two formats are deliberately **not** included: Kugou `.kgm`/`.kgma` need a
+  per-byte mask table we could not obtain from a reachable source, and registering
+  an extension that can only fail is worse than not recognising it at all.
+
+  有两种刻意**没有**做：酷狗的 `.kgm`/`.kgma` 需要一张逐字节掩码表，而我们没能
+  从可达的源里取到它；登记一个必然失败的扩展名，比不认得它更糟。
+
+### 关于可信度
+
+There is no real-world sample in this repository and there will not be one — this
+ecosystem's own projects test with synthetic data for the same reason. So the
+verification is two-layered and the layers prove different things: the committed
+fixture is a synthetic container that **an independent implementation (`ncmdump`,
+Python) decrypts to the identical bytes**, while everything else is round-tripped.
+The first layer is the only one with cross-implementation evidence; the gap is
+written down in `docs/NOTES.md` rather than papered over.
+
+这个仓库里没有真实样本，也不会有——这个生态里的同类项目出于同样的理由只用合成数据。
+所以验证分两层、两层各证明不同的事：随仓库提交的素材是一个**合成**容器，而它解出来的
+字节与**另一个独立实现（`ncmdump`，Python）逐字节相同**；其余靠往返。
+**只有第一层有跨实现证据**，缺口如实写在 `docs/NOTES.md` 里，不糊过去。
+
+## [0.3.4] - 2026-09-17
+
+### Added
+
+- **Quality and speed controls for video encoding**, in the shape HandBrake uses:
+  a constant-quality value (CRF), an encoder preset, and a tune. They apply to the
+  containers that use libx264 (mp4, mkv, mov, m4v, avi); webm uses VP9, whose CRF
+  is a different scale and whose speed knob is not `-preset`, and gif has no
+  quality knob at all.
+
+  Every default is measured rather than guessed, and one of the measurements
+  contradicts the obvious expectation: **at a fixed CRF a slower preset does not
+  produce a smaller file.** `veryfast` came out smallest *and* worst by SSIM,
+  because the faster presets drop the psychovisual optimisations and code for
+  PSNR alone. So the two knobs are not convertible into each other, and the UI
+  does not claim otherwise. Moving from `veryfast` to `veryslow` costs 5.6–6.6×
+  the time while quality stops improving past `fast`, and the slow presets use up
+  to 2.3× the memory — which the concurrency budget now accounts for.
+
+  They are mutually exclusive with a size/bitrate target, with lossless trimming,
+  and with hardware encoding (a quality value is not portable between `-crf` and
+  `-cq`). Every one of those collisions reports an error instead of silently
+  picking a side.
+
+### Fixed
+
+- **The Claude Code plugin could not find an installation that was not in a
+  default directory.** The installer lets you pick a directory; when you did, the
+  plugin reported that Arbiter was not installed at all, while the app itself was
+  fine. It now also reads the uninstall entries in the registry. The first version
+  of the tests for this injected registry keys in a different shape than
+  production, which made the coverage look real when it was not — an adversarial
+  audit caught it, and the coverage was rebuilt.
+
 ## [0.3.3] - 2026-09-16
 
 Four additions, none of which change what an existing conversion produces.
@@ -229,3 +353,6 @@ First release.
 [0.3.1]: https://github.com/Polaris-bit189/Arbiter/releases/tag/v0.3.1
 [0.3.2]: https://github.com/Polaris-bit189/Arbiter/releases/tag/v0.3.2
 [0.3.3]: https://github.com/Polaris-bit189/Arbiter/releases/tag/v0.3.3
+[0.3.4]: https://github.com/Polaris-bit189/Arbiter/releases/tag/v0.3.4
+[0.3.6]: https://github.com/Polaris-bit189/Arbiter/releases/tag/v0.3.6
+[0.3.5]: https://github.com/Polaris-bit189/Arbiter/releases/tag/v0.3.5

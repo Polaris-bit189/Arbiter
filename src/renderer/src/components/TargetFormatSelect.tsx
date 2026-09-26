@@ -1,3 +1,4 @@
+import { t } from '@shared/i18n'
 import { categoryOf } from '@shared/formats'
 import { CATEGORIES, type Category } from '@shared/types'
 import { cn } from '../lib/cn'
@@ -56,7 +57,7 @@ function groupByCategory(fromExt: string, targets: string[]): TargetGroup[] {
 
   return ordered.map((category) => ({
     category,
-    label: CATEGORY_LABEL[category],
+    label: t(CATEGORY_LABEL[category]),
     items: buckets.get(category) as string[]
   }))
 }
@@ -90,10 +91,10 @@ export function TargetFormatSelect({
       onChange={(e) => onChange(e.target.value)}
       title={
         disabled
-          ? '调律中，目标格式已锁定'
+          ? t('shell.target.locked')
           : highlighted
-            ? `上次这类文件转成了 ${toExt.toUpperCase()}（已替你预置，可以改）`
-            : `转为 ${toExt.toUpperCase()}`
+            ? t('shell.target.highlighted', { ext: toExt.toUpperCase() })
+            : t('shell.target.title', { ext: toExt.toUpperCase() })
       }
       // `border-gold` 是工具类、`.select-dark` 的描边在 components 层，
       // 层序决定了工具类压得住它（见 theme.css 顶部那段说明）。

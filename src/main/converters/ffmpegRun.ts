@@ -29,7 +29,8 @@ import { parseProbeOutput } from '../core/probe'
 import { FfmpegProgressParser } from '../core/progress'
 import { partPathOf } from '../core/outputName'
 import { killTree } from '../core/kill'
-import { MIN_BITRATE_KBPS } from '@shared/options'
+import { MIN_BITRATE_KBPS, QUALITY_OUTPUT_EXCLUSIVE, supportsQuality } from '@shared/options'
+import { stagePair } from '@shared/i18n/stage'
 import type { FilterAction, LoudnormAction, TaskProgress } from '@shared/types'
 import {
   ConversionCanceled,
@@ -147,6 +148,12 @@ export async function runFfmpeg(options: ConvertContext): Promise<void> {
   const outputTarget = taskOptions?.output
 
   /**
+   * 编码质量档（恒定质量 / 速度档 / 调优）。与 `outputTarget` **互斥**，两者同时出现是
+   * 调用方自相矛盾——理由与统一文案见 `@shared/options` 的 `QUALITY_OUTPUT_EXCLUSIVE`。
+   */
+  const quality = taskOptions?.quality
+
+  /**
    * 处理链（有序）。哪一类任务装得下哪一步由 `@shared/options.ts` 的 `canUseAction`
    * 裁决（`TaskManager.setOptions` 用的是同一份函数），所以到这里一定是合法的。
    *
@@ -180,7 +187,7 @@ export async function runFfmpeg(options: ConvertContext): Promise<void> {
   }
 
   // 时长还没到手，百分比无从谈起，先给不确定进度。图片、无时长信息的流会一直停在这里。
-  onProgress({ kind: 'indeterminate', stage: '转换中…' })
+  onProgress({ kind: 'indeterminate', ...stagePair({ key: 'stage.converting' }) })
 
   let parser: FfmpegProgressParser | null = null
   /** 时长到手之前 stdout 上的进度记录先攒着，拿到解析器后一次性喂进去，一条都不丢 */
@@ -313,6 +320,43 @@ export async function runFfmpeg(options: ConvertContext): Promise<void> {
     ])
   }
 
+  // ---- 编码质量档：三条判据，全部在启动转换进程**之前** ----
+  //
+  // 顺序紧挨着 `outputTarget` 那一段，因为两者的失败方式逐条同构：都要求重新编码、
+  // 都与 `-c copy` 的快车道互斥。唯一的差别是「互斥的另一半」从体积目标换成了质量档。
+  //
+  // ⚠️ **出口判据必须在这里再判一次，不能只靠 `setOptions`**：目标格式在参数设完之后
+  // 还能改（`setTarget` 不碰 `options`）。少了这一道，「先给 mp4 设好 CRF 18、
+  // 再把目标改成 webm」会让 `quality` 一路传到 `videoArgs`，而 webm 那一格**看不见它**
+  // ——参数被静默忽略、任务报成功，用户以为自己的 18 生效了。
+  if (quality !== undefined) {
+    if (!supportsQuality(toExt)) {
+      throw new ConversionFailed([
+        `.${toExt} 这个出口没有编码质量档：${toExt === 'webm' ? 'webm 走 VP9（它的 CRF 是另一条尺子，速度档也不是 -preset）' : 'gif 走调色板滤镜，根本没有质量旋钮'}`,
+        // ⚠️ 这一句是**卡片上真正显示的那一行**（`core/task.ts` 的 summarize 取最后一条有内容的）
+        '把目标改成 mp4 / mkv / mov / avi，或清掉质量档'
+      ])
+    }
+    if (outputTarget !== undefined) {
+      throw new ConversionFailed([
+        QUALITY_OUTPUT_EXCLUSIVE,
+        '两者只能留一个：清掉质量档（按体积/码率编），或清掉体积/码率目标（按质量编）'
+      ])
+    }
+    if (clip && trim && trim.mode === 'lossless') {
+      throw new ConversionFailed([
+        '编码质量档与无损裁剪不能同时要求：无损裁剪一个字节都不重编，改不了画质',
+        '去掉质量档；或改用精确模式（它本来就重新编码，两者可以一起用）'
+      ])
+    }
+    if (remuxMode === 'force') {
+      throw new ConversionFailed([
+        '编码质量档与「必须重封装」不能同时要求：重封装搬的是原始码流，一个字节都不编',
+        '去掉质量档；或改用 mode=auto / mode=reencode'
+      ])
+    }
+  }
+
   // ---- remux 决策：必须在启动转换进程**之前**做完 ----
   //
   // 编解码器只能起个进程问 ffmpeg 才知道，所以这里单独探一次。这笔开销在「必然重编码」的
@@ -369,15 +413,18 @@ export async function runFfmpeg(options: ConvertContext): Promise<void> {
     return probedStderr
   }
 
-  // 带裁剪、**带处理链**、或**带输出约束**时整个跳过 remux 快车道（理由见上面那两段互斥说明）。
+  // 带裁剪、**带处理链**、**带输出约束**、或**带编码质量档**时整个跳过 remux 快车道
+  //（理由见上面那几段互斥说明）。
   //
   // ⚠️ `hasFilters` 这一条是**承重**的：少了它，一条「mkv(h264) → mp4 + 去隔行」的任务会走
   // `-c copy`，把源码流原样搬过去——滤镜一个都没生效、不报任何错，而任务报成功。
+  // `quality` 那一条同理且更直白：remux 一个字节都不编，CRF 与预设无处施加。
   let remux = false
   if (
     clip === undefined &&
     !hasFilters &&
     outputTarget === undefined &&
+    quality === undefined &&
     remuxMode !== 'off' &&
     remuxEligible(fromExt, toExt)
   ) {
@@ -512,24 +559,38 @@ export async function runFfmpeg(options: ConvertContext): Promise<void> {
   // 探测本身有缓存（见 engines/nvenc.ts），一个进程只真起一次子进程。
   let useHardware = false
   /**
-   * 「有输出目标时明确退回 CPU」那句话，两条路共用同一份文案。
+   * 「有输出目标时明确退回 CPU」那句话，两条路共用同一份码（`stagePair` 一次给出中文兜底文本与 `stageRef`）。
    *
    * ⚠️ **两遍编码那条路必须把它并进「第一遍」那条提示里**：两条 `emit` 之间一个 `await`
    * 都没有，它们会落进同一批 patch、合并时后一条胜出——单独发出去的那条用户根本看不见，
    * 而它防的正是「静默换了一条路」。所以下面两处都要出现（单遍时用独立那条，
    * 两遍时并进第一遍，用户在整个第一遍里都能看到它）。
    */
-  const abrCpuNote = '输出目标走 ABR，与显卡编码的 CQ 模式互斥：本次用 CPU 编码'
+  const abrCpuPair = stagePair({ key: 'stage.ffmpeg.abrCpu' })
 
-  if (!remux && !trimCopy && encode === undefined && getSettings().hardwareEncode) {
-    useHardware = await hardwareEncodeAvailable()
-    // 让用户看得见「你开了 GPU，但这次没用上」——静默走 CPU 与静默降质同类，
-    // 而这条恰恰是用户显式选过的东西，更要说清楚。
-    if (!useHardware) {
-      emit({ kind: 'indeterminate', stage: '未找到可用显卡，本次用 CPU 编码' }, true)
+  /**
+   * 「有质量档时明确退回 CPU」那句话。
+   *
+   * 与 `abrCpuPair` 同形但是**另一条**理由，所以不能复用同一句：ABR 是「`-b:v` 与
+   * `-cq` 互斥」，而这里是「两套质量参数根本不是同一样东西」——`-crf 23` 与 `-cq 23`
+   * 同号不同质（实测产物差 2.8 倍），`-preset veryfast` 与 `-preset p4` 也不是同一个
+   * 词汇表。把 CRF 直接当 CQ 用，用户会在同一个数字下拿到一份大小完全不同的产物。
+   */
+  const qualityCpuPair = stagePair({ key: 'stage.ffmpeg.qualityCpu' })
+
+  if (getSettings().hardwareEncode) {
+    if (encode !== undefined) {
+      emit({ kind: 'indeterminate', ...abrCpuPair }, true)
+    } else if (quality !== undefined) {
+      emit({ kind: 'indeterminate', ...qualityCpuPair }, true)
+    } else if (!remux && !trimCopy) {
+      useHardware = await hardwareEncodeAvailable()
+      // 让用户看得见「你开了 GPU，但这次没用上」——静默走 CPU 与静默降质同类，
+      // 而这条恰恰是用户显式选过的东西，更要说清楚。
+      if (!useHardware) {
+        emit({ kind: 'indeterminate', ...stagePair({ key: 'stage.ffmpeg.noGpu' }) }, true)
+      }
     }
-  } else if (encode !== undefined && getSettings().hardwareEncode) {
-    emit({ kind: 'indeterminate', stage: abrCpuNote }, true)
   }
 
   /**
@@ -561,6 +622,7 @@ export async function runFfmpeg(options: ConvertContext): Promise<void> {
             hardware,
             trim: clip,
             target,
+            quality,
             filters: activeFilters,
             loudnorm: loudnormStats
           })
@@ -570,6 +632,7 @@ export async function runFfmpeg(options: ConvertContext): Promise<void> {
       : buildFfmpegArgs(input, tempPath, fromExt, toExt, {
           hardware,
           target,
+          quality,
           filters: activeFilters,
           loudnorm: loudnormStats
         })
@@ -665,10 +728,13 @@ export async function runFfmpeg(options: ConvertContext): Promise<void> {
       const info = probeErr === null ? null : parseProbeOutput(probeErr)
 
       if (info !== null && info.audioCodec === null) {
-        emit({ kind: 'indeterminate', stage: '源里没有音轨，跳过响度归一化' }, true)
+        emit(
+          { kind: 'indeterminate', ...stagePair({ key: 'stage.ffmpeg.noAudioSkipLoudnorm' }) },
+          true
+        )
         activeFilters = filters.filter((action) => action.kind !== 'loudnorm')
       } else {
-        emit({ kind: 'indeterminate', stage: '第一遍分析（响度归一化）' }, true)
+        emit({ kind: 'indeterminate', ...stagePair({ key: 'stage.ffmpeg.loudnormPass' }) }, true)
         const pass = await attempt(buildLoudnormProbeArgs(input, loudnormAction, clip), {
           quiet: true
         })
@@ -690,10 +756,9 @@ export async function runFfmpeg(options: ConvertContext): Promise<void> {
         emit(
           {
             kind: 'indeterminate',
-            stage:
-              loudnormStats === null
-                ? '读不出响度统计，本步按单遍处理 · 编码中'
-                : '编码（响度归一化）'
+            ...(loudnormStats === null
+              ? stagePair({ key: 'stage.ffmpeg.loudnormSinglePass' })
+              : stagePair({ key: 'stage.ffmpeg.loudnormEncoding' }))
           },
           true
         )
@@ -701,12 +766,17 @@ export async function runFfmpeg(options: ConvertContext): Promise<void> {
     }
 
     if (passLogPrefix !== null && encode?.videoKbps !== undefined) {
+      // 「输出目标走 ABR」那条备注必须并进这一条里（上面那段说过：两条 emit 之间没有
+      // await，合并时后一条胜出），所以两遍编码那条路用的是**另一个码**——不是把两句话
+      // 手工拼起来，两句话各自的码也都还在字典里。
       emit(
         {
           kind: 'indeterminate',
-          stage: getSettings().hardwareEncode
-            ? `${abrCpuNote} · 第一遍分析（两遍编码）`
-            : '第一遍分析（两遍编码）'
+          ...stagePair({
+            key: getSettings().hardwareEncode
+              ? 'stage.ffmpeg.abrCpuPassOne'
+              : 'stage.ffmpeg.passOne'
+          })
         },
         true
       )
@@ -733,7 +803,7 @@ export async function runFfmpeg(options: ConvertContext): Promise<void> {
           ...tailLines(pass1.stderr)
         ])
       }
-      emit({ kind: 'indeterminate', stage: '第二遍编码（两遍编码）' }, true)
+      emit({ kind: 'indeterminate', ...stagePair({ key: 'stage.ffmpeg.passTwo' }) }, true)
     }
 
     let result = await attempt(argsFor(useHardware))
@@ -749,7 +819,7 @@ export async function runFfmpeg(options: ConvertContext): Promise<void> {
     // 不开这个开关时会得到的那个。唯一的代价是慢——而失败重来一遍比报错强。
     let hardwareNote: string[] = []
     if (result.code !== 0 && useHardware && !cancel.canceled) {
-      emit({ kind: 'indeterminate', stage: '显卡编码失败，改用 CPU 重试' }, true)
+      emit({ kind: 'indeterminate', ...stagePair({ key: 'stage.ffmpeg.gpuFallback' }) }, true)
       hardwareNote = tailLines(result.stderr)
       useHardware = false
       result = await attempt(argsFor(false))

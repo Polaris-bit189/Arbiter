@@ -1,5 +1,6 @@
 import { homedir } from 'os'
 import { join } from 'path'
+import { t } from '@shared/i18n'
 import { appPaths } from './appPaths'
 import { buildSendToArgs } from './cli'
 
@@ -110,7 +111,10 @@ export function expectedSendToLink(): ShortcutSpec {
     // dev 下这是 electron.exe，`buildSendToArgs` 会补上仓库根那个参数
     target: process.execPath,
     args: buildSendToArgs({ appPath: paths.appPath, isPackaged: paths.isPackaged }),
-    description: '把文件送入调律者转换器'
+    // ⚠️ 这句会被 Windows 写进 `.lnk` 里、由资源管理器画在「发送到」菜单上，**不会自己
+    // 跟着语言变**。语言改了之后重写它，靠的是 `ipc/settings.ts` 那条「催一次自愈」。
+    // 它不参与 `sameLink` 的比对（只比 target / args），所以改文案不会引起重写循环。
+    description: t('integration.sendTo.description')
   }
 }
 
@@ -133,7 +137,7 @@ export function readSendTo(): SendToState {
   const path = sendToLinkPath()
 
   if (io === null) {
-    return { installed: false, path, actual: null, expected, error: '快捷方式读写未注入' }
+    return { installed: false, path, actual: null, expected, error: t('integration.sendTo.noIo') }
   }
 
   let actual: ShortcutSpec | null
@@ -157,7 +161,7 @@ export function installSendTo(): SendToState {
   const path = sendToLinkPath()
 
   if (io === null) {
-    return { installed: false, path, actual: null, expected, error: '快捷方式读写未注入' }
+    return { installed: false, path, actual: null, expected, error: t('integration.sendTo.noIo') }
   }
 
   const failure = io.write(path, expected)
@@ -169,7 +173,7 @@ export function installSendTo(): SendToState {
   // 某些值时（比如目标路径被系统规范化过），界面必须显示真相而不是我们的意图。
   const after = readSendTo()
   if (!after.installed) {
-    return { ...after, error: after.error ?? '快捷方式写完之后读不到' }
+    return { ...after, error: after.error ?? t('integration.sendTo.readBackFailed') }
   }
   return after
 }
@@ -185,7 +189,7 @@ export function uninstallSendTo(): SendToState {
   const path = sendToLinkPath()
 
   if (io === null) {
-    return { installed: false, path, actual: null, expected, error: '快捷方式读写未注入' }
+    return { installed: false, path, actual: null, expected, error: t('integration.sendTo.noIo') }
   }
 
   const failure = io.remove(path)

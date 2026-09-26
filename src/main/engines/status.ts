@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from 'child_process'
 import { existsSync } from 'fs'
 import { ENGINE_KEYS, type EngineKey, type EngineState, type EngineStatus } from '@shared/types'
+import { t, type KeysOf } from '@shared/i18n'
 import { appPaths } from '../core/appPaths'
 import { killTree } from '../core/kill'
 import { getSettings } from '../core/settings'
@@ -32,32 +33,39 @@ import { calibrePath, libreOfficePath, resetHeavyCache } from './heavy'
 /* ------------------------------------------------------------------ 展示用文案 */
 
 /**
- * 引擎的中文显示名。
+ * 引擎的中文显示名 —— 存的是**字典键**，不是句子。
  *
  * 写成 `Record<EngineKey, string>` 而不是数组：`ENGINE_KEYS` 里加一个键，
  * 这里就是**编译错误**；写成数组则是一个静默少掉的行。
+ *
+ * ⚠️ 值类型必须是 `KeysOf<'engines.label.'>` 这个**窄联合**，不能是整个 `MsgKey`：
+ * 后者包含 `eta.seconds` 那种带占位符的键，于是 `t(LABELS[key])` 会报一个毫不相干的
+ * `Expected 2 arguments, but got 1`——而真正会被传进去的那八个键一个参数都不要
+ * （见 `types.ts` 里 `KeysOf` 的说明，这个坑 P2 里被踩过好几次）。
  */
-const LABELS: Record<EngineKey, string> = {
-  ffmpeg: 'FFmpeg',
-  sharp: 'Sharp',
-  pdf: 'Chromium 排版',
-  pandoc: 'Pandoc',
-  libreoffice: 'LibreOffice',
-  calibre: 'Calibre',
-  archive: '7-Zip'
+const LABELS: Record<EngineKey, KeysOf<'engines.label.'>> = {
+  ffmpeg: 'engines.label.ffmpeg',
+  sharp: 'engines.label.sharp',
+  pdf: 'engines.label.pdf',
+  pandoc: 'engines.label.pandoc',
+  libreoffice: 'engines.label.libreoffice',
+  calibre: 'engines.label.calibre',
+  archive: 'engines.label.archive',
+  encmusic: 'engines.label.encmusic'
 }
 
 /**
- * 引擎的中文名。
+ * 引擎的显示名（按当前语言）。
  *
  * 主进程内部拼用户可见文案时（比如任务被拒的理由：「需要 LibreOffice 引擎，当前未就绪」）
  * 走这里，**不要另抄一份**——关于页徽章上的那一份和它是同一个表，抄成两份之后
  * 「LibreOffice」和「libre office」这种分歧只会出现在用户看得见的地方。
  *
- * 用函数包一层而不是直接导出 `LABELS`：交出去就是把这张表变成了别人可以就地改的东西。
+ * 用函数包一层而不是直接导出 `LABELS`：交出去就是把这张表变成了别人可以就地改的东西
+ * （而且它现在存的是**键**，直接交出去的人多半会当成句子用）。
  */
 export function engineLabel(key: EngineKey): string {
-  return LABELS[key]
+  return t(LABELS[key])
 }
 
 /**
@@ -69,11 +77,11 @@ export function engineLabel(key: EngineKey): string {
 function originText(state: EngineState): string | undefined {
   switch (state) {
     case 'bundled':
-      return '随包内置'
+      return t('engines.origin.bundled')
     case 'installed':
-      return '按需下载'
+      return t('engines.origin.installed')
     case 'system':
-      return '系统安装'
+      return t('engines.origin.system')
     default:
       return undefined
   }
@@ -169,9 +177,15 @@ function resolveCheap(key: EngineKey): Resolved {
         state: originOf(engine.path),
         // 这一行是关于页最有价值的输出：`supportsRar` 直接决定 `.rar` 能不能转，
         // 而「已就绪」三个字会把它盖掉——用户看到「已就绪」却转不了 rar 才是最坏的情况。
-        detail: engine.supportsRar ? '完整版，支持 RAR' : '精简版，不支持 RAR'
+        detail: t(engine.supportsRar ? 'engines.detail.rarFull' : 'engines.detail.rarLight')
       }
     }
+
+    // 开加密容器是**纯 JS**（XOR 与 AES 都在进程里），没有可解析的路径，与下面两个
+    // 同属「随进程就绪」。它照样得在这张 switch 里占一格——这条 switch 没有兜底分支，
+    // 靠的正是穷尽性。
+    case 'encmusic':
+      return { path: null, state: 'bundled', detail: t('engines.detail.encmusic') }
 
     /**
      * sharp 与 pdf **不是可执行文件**，既没有路径也没有版本可探：
@@ -181,9 +195,9 @@ function resolveCheap(key: EngineKey): Resolved {
      * 顶部已经有一行（`AppInfo.chrome`），在这里再报一遍是同一份数据的第二种说法。
      */
     case 'sharp':
-      return { path: null, state: 'bundled', detail: '原生模块（libvips）' }
+      return { path: null, state: 'bundled', detail: t('engines.detail.sharp') }
     case 'pdf':
-      return { path: null, state: 'bundled', detail: 'Chromium 内置' }
+      return { path: null, state: 'bundled', detail: t('engines.detail.pdf') }
   }
 }
 
@@ -256,7 +270,10 @@ export function engineStatus(): EngineStatus[] {
 
   return ENGINE_KEYS.map((key) => {
     const r = resolveCheap(key)
-    const status: EngineStatus = { key, label: LABELS[key], state: r.state }
+    // ⚠️ 这里**必须**走 `engineLabel()`，不能直接写 `LABELS[key]`——表里现在存的是
+    // **键**，直接取出来会让关于页徽章上显示 `engines.label.ffmpeg` 而不是 `FFmpeg`，
+    // 而这是一处**不报错**的静默失败（类型上 `label` 就是 `string`）。
+    const status: EngineStatus = { key, label: engineLabel(key), state: r.state }
     if (r.path !== null) status.path = r.path
     if (r.detail !== undefined) status.detail = r.detail
 
@@ -324,7 +341,10 @@ async function runVersionProbe(exe: string, args: string[], timeoutMs: number): 
       // windowsHide：不闪黑框。这是 GUI 应用，弹一个控制台窗口出来非常突兀。
       child = spawn(exe, args, { windowsHide: true })
     } catch (error) {
-      finish({ ok: false, error: `无法启动进程：${(error as Error).message}` })
+      finish({
+        ok: false,
+        error: t('engines.probe.spawnFailed', { message: (error as Error).message })
+      })
       return
     }
 
@@ -341,7 +361,10 @@ async function runVersionProbe(exe: string, args: string[], timeoutMs: number): 
     const timer = setTimeout(async () => {
       child.kill()
       await killTree(child.pid)
-      finish({ ok: false, error: `探测超时（${Math.round(timeoutMs / 1000)} 秒）` })
+      finish({
+        ok: false,
+        error: t('engines.probe.timeout', { seconds: Math.round(timeoutMs / 1000) })
+      })
     }, timeoutMs)
 
     let out = ''
@@ -368,7 +391,7 @@ async function runVersionProbe(exe: string, args: string[], timeoutMs: number): 
 
     child.on('error', (error) => {
       stopTimer()
-      finish({ ok: false, error: `无法启动进程：${error.message}` })
+      finish({ ok: false, error: t('engines.probe.spawnFailed', { message: error.message }) })
     })
 
     child.on('close', (code) => {
@@ -379,7 +402,12 @@ async function runVersionProbe(exe: string, args: string[], timeoutMs: number): 
           .split(/\r?\n/)
           .filter((l) => l.trim().length > 0)
           .pop()
-        finish({ ok: false, error: last ? `退出码 ${code}：${last}` : `退出码 ${code}` })
+        finish({
+          ok: false,
+          error: last
+            ? t('engines.probe.exitCodeWithMessage', { code, message: last })
+            : t('engines.probe.exitCode', { code })
+        })
         return
       }
       // stdout 优先：这几家的 `--version` 都写 stdout。退到 stderr 是给 Calibre 那类
@@ -446,7 +474,7 @@ async function probeOne(key: EngineKey): Promise<{ version?: string; error?: str
       if (!existsSync(com)) {
         // 到这一步说明引擎本体是在的（`libreOfficePath()` 已经验过 soffice.exe +
         // soffice.bin），所以这里的失败是「装得不完整」而不是「没装」，值得单说一句。
-        result = { ok: false, error: '同目录下没有 soffice.com，捕获不到版本输出' }
+        result = { ok: false, error: t('engines.probe.noSofficeCom') }
         break
       }
       result = await run(com, ['--version'], LIBREOFFICE_TIMEOUT_MS)
@@ -455,6 +483,7 @@ async function probeOne(key: EngineKey): Promise<{ version?: string; error?: str
 
     case 'sharp':
     case 'pdf':
+    case 'encmusic':
       return null
   }
 
@@ -463,7 +492,7 @@ async function probeOne(key: EngineKey): Promise<{ version?: string; error?: str
 
   const matched = pattern?.exec(result.output)
   if (matched === null || matched === undefined || matched[1] === undefined) {
-    return { error: '输出里没有版本号' }
+    return { error: t('engines.probe.noVersion') }
   }
   return { version: matched[1] }
 }

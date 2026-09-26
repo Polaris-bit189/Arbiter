@@ -10,6 +10,7 @@ import {
   writeSync
 } from 'fs'
 import { dirname } from 'path'
+import { t } from '@shared/i18n'
 import type { SettingsCorruption } from '@shared/types'
 
 /**
@@ -141,7 +142,7 @@ export function createJsonStore<T>(options: JsonStoreOptions<T>): JsonStore<T> {
       // ——「我的设置全没了」——而区分它们只会多一条没人看的支路。
       const parsed = options.parse(raw)
       if (parsed !== null) return parsed
-      reason = '内容不是认识的形状（被手改过，或来自不兼容的版本）'
+      reason = t('integration.jsonStore.badShape')
     } catch (error) {
       reason = error instanceof Error ? error.message : String(error)
     }
@@ -151,9 +152,11 @@ export function createJsonStore<T>(options: JsonStoreOptions<T>): JsonStore<T> {
     const quarantinePath = quarantine()
     lastCorruption = { file: options.file, quarantinePath, reason }
     console.error(
-      `[jsonStore] ${options.file} 读不出可用数据（${reason}）；` +
-        (quarantinePath ? `原文件已留档为 ${quarantinePath}` : '留档失败，原文件仍在原地') +
-        '，本次改用默认值。'
+      t('integration.jsonStore.readFailed', { file: options.file, reason }) +
+        (quarantinePath
+          ? t('integration.jsonStore.quarantined', { path: quarantinePath })
+          : t('integration.jsonStore.quarantineFailed')) +
+        t('integration.jsonStore.fallbackToDefaults')
     )
     return options.initial()
   }
@@ -200,7 +203,7 @@ export function createJsonStore<T>(options: JsonStoreOptions<T>): JsonStore<T> {
       } catch {
         // 临时文件可能压根没建出来，无所谓
       }
-      console.error(`[jsonStore] 写不动 ${options.file}：`, error)
+      console.error(t('integration.jsonStore.writeFailed', { file: options.file }), error)
     }
   }
 

@@ -1,0 +1,168 @@
+{
+  "why": [
+    "「出一份不含解密功能的版本」的全部规则。数据放在仓库里、与代码同版本，",
+    "因为**接线点就是代码的一部分**：加一个容器格式、改一次引擎表，这份清单都要跟着动。",
+    "规则住在 D:check 那个导出脚本里的话，两边会各自漂，而漂的表现是",
+    "**剥完之后树编译不过**（接线还在、实现没了）或者更糟——**剥不干净而没人发现**。",
+    "",
+    "怎么用：node scripts/strip-encmusic.mjs <目标目录>（导出脚本会自动调）。",
+    "每一步都验命中次数：对不上就**整个中止**，不做半份输出。",
+    "",
+    "⚠️ 剥离工具自己也在这份名单里：干净版本不该留下「这里曾经有过一个解密功能」的痕迹，",
+    "   而且留着它就会砸掉最后那道复核（那两个文件的名字里就带着特征串）。"
+  ],
+  "delete": [
+    "src/main/converters/encmusic",
+    "scripts/test-encmusic.ts",
+    "scripts/falsify-encmusic.mjs",
+    "scripts/fixtures/encmusic",
+    "scripts/encmusic-strip.json",
+    "scripts/strip-encmusic.mjs"
+  ],
+  "substitutions": [
+    {
+      "file": "src/shared/types.ts",
+      "note": "引擎表那一格（含注释）",
+      "start": "  'archive',",
+      "end": "\n] as const",
+      "to": "  'archive'"
+    },
+    {
+      "file": "src/main/core/queue.ts",
+      "note": "并发容量那一格",
+      "start": "  archive: 2,",
+      "end": "\n}",
+      "to": "  archive: 2"
+    },
+    {
+      "file": "src/main/converters/index.ts",
+      "note": "路由分发那一支",
+      "start": "    case 'encmusic': {",
+      "end": "    case null:",
+      "to": ""
+    },
+    {
+      "file": "src/main/engines/status.ts",
+      "note": "关于页的引擎名",
+      "start": "  archive: '7-Zip',",
+      "end": "\n}",
+      "to": "  archive: '7-Zip'"
+    },
+    {
+      "file": "src/main/engines/status.ts",
+      "note": "resolveCheap 那一格",
+      "start": "    // 开加密容器是",
+      "end": "    /**\n     * sharp 与 pdf",
+      "to": "    "
+    },
+    {
+      "file": "src/main/engines/status.ts",
+      "note": "版本探测那一格",
+      "start": "    case 'pdf':\n    case 'encmusic':",
+      "end": "      return null",
+      "to": "    case 'pdf':\n"
+    },
+    {
+      "file": "src/shared/formats.ts",
+      "note": "ENC_MUSIC_SRC 的声明整块（含它前面那段长注释）",
+      "start": "/**\n * 加密音乐容器。",
+      "end": "register('audio', [",
+      "to": ""
+    },
+    {
+      "file": "src/shared/formats.ts",
+      "note": "register(audio) 里的展开",
+      "start": "  'aif',",
+      "end": "\n])",
+      "to": "  'aif'"
+    },
+    {
+      "file": "src/shared/formats.ts",
+      "note": "engineFor 的音频分支",
+      "start": "    case 'video':\n      return 'ffmpeg'\n\n    case 'audio':",
+      "end": "\n\n    case 'image':",
+      "to": "    case 'video':\n    case 'audio':\n      return 'ffmpeg'\n"
+    },
+    {
+      "file": "package.json",
+      "note": "test:encmusic 那行",
+      "start": "    \"test:encmusic\":",
+      "end": "\n",
+      "to": ""
+    },
+    {
+      "file": "package.json",
+      "note": "falsify:encmusic 那行",
+      "start": "    \"falsify:encmusic\":",
+      "end": "\n",
+      "to": ""
+    },
+    {
+      "file": "package.json",
+      "note": "test 聚合里的那一节",
+      "start": "&& npm run test:encmusic ",
+      "end": "&& npm run test:preload-imports",
+      "to": ""
+    },
+    {
+      "file": "package.json",
+      "note": "falsify 聚合里的那一节",
+      "start": "&& npm run falsify:encmusic",
+      "end": "\"",
+      "to": ""
+    },
+    {
+      "file": "CHANGELOG.md",
+      "note": "0.3.5 那一整节（它的内容全是这一类）",
+      "start": "## [0.3.5] - 2026-09-17",
+      "end": "## [0.3.4] - 2026-09-17",
+      "to": ""
+    },
+    {
+      "file": "README.md",
+      "note": "路线图里那一条",
+      "start": "- [x] Encrypted music containers",
+      "end": "- [x] MCP server and Claude Code plugin",
+      "to": ""
+    },
+    {
+      "file": ".github/workflows/release.yml",
+      "note": "发布说明里那一条（另一条是编码质量档，留着）",
+      "start": "            - **Encrypted music containers can be converted.**",
+      "end": "            - **Quality and speed controls for video encoding.**",
+      "to": ""
+    },
+    {
+      "file": "docs/PLAN.md",
+      "note": "§9.2b 那一节",
+      "start": "### 9.2b 加密音乐容器",
+      "end": "### 9.3 需要新引擎",
+      "to": ""
+    },
+    {
+      "file": "docs/NOTES.md",
+      "note": "约束 42（导出时 docs/NOTES.md 已经改名成这个）",
+      "start": "---\n\n**42. 加密音乐容器",
+      "end": "\n\n## 测试",
+      "to": "\n\n## 测试"
+    },
+    {
+      "file": "scripts/fixtures/README.md",
+      "note": "素材说明的最后一节（到文件尾）",
+      "start": "## 加密音乐容器（scripts/fixtures/encmusic/）",
+      "end": null,
+      "to": ""
+    }
+  ],
+  "forbidden": [
+    "encmusic",
+    "ENC_MUSIC_SRC",
+    "CTENFDAM",
+    "ncmdump",
+    ".ncm",
+    "mflac",
+    "qmcflac",
+    "yeelion",
+    "解开加密容器"
+  ]
+}

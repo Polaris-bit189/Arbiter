@@ -37,3 +37,24 @@
 来源：这两个文件取自 [`markokr/rarfile`](https://github.com/markokr/rarfile) 的
 `test/files/`（MIT），经 `ghfast.top` 代理下载。国内直连 `raw.githubusercontent.com`
 不通，jsDelivr 又只代理已进缓存的文件。按原样保留，未做任何改动。
+
+## 加密音乐容器（scripts/fixtures/encmusic/）
+
+**全是合成数据，不含任何版权内容。** 这一行与其余素材不同：它们不是「第三方或真实世界的样本」，
+而是**自造的**——因为真实样本就是这一类的敏感点，生态里的同类项目也都不提交（`HRuiCcc/music-geshizhuanhuan`
+的 README 明写「测试样本全部为自建合成数据（正弦波），不含任何版权内容」）。
+
+- `sample.ncm` —— 一个 .ncm 容器，里面装的是 0.05 秒 440 Hz 正弦波的 WAV。
+  由**固定密钥**的合成写入器产出（不是随机的），所以每次生成都得到同一个文件。
+- `sample.expected.wav` —— 它**必须**解出来的那份字节。
+
+⚠️ **这两个文件的价值不在于「它们是我们造的」，而在于「另一个独立实现也解出同一份」。**
+实测（2026-09-17）：装 `pycryptodome` + `mutagen` 之后跑
+
+```
+python -c "from ncmdump.core import dump; dump('sample.ncm', 'out.bin')"
+```
+
+产物与 `sample.expected.wav` **逐字节相同**。这一步**不在 CI 里**（要 Python 依赖），
+所以它是一次性取证——「验到了哪一层」的完整说明见 `docs/NOTES.md` 的约束 42。
+

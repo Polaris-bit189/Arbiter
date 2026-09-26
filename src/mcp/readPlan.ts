@@ -1,4 +1,6 @@
 import { categoryOf, engineFor, sourceExtsByCategory, targetsFor } from '@shared/formats'
+// 用户可见文案一律走字典（P6）。这一片是 `mcp.readPlan.*`，见 `@shared/i18n/parts/mcpJobs.ts`。
+import { t } from '@shared/i18n'
 import { McpToolError } from './errors'
 import type { ReadFormat } from './schema'
 
@@ -126,10 +128,10 @@ export function resolveReadPlan(rawExt: string, requested: ReadFormat): ReadPlan
 
   if (fromExt === '') {
     throw new McpToolError(
-      '源文件没有扩展名，判断不了它是什么',
+      t('mcp.readPlan.noExt'),
       {
         readable: readableExts(),
-        hint: '源文件必须带真实扩展名，别拿 .part / .tmp 这类中间文件来读'
+        hint: t('mcp.readPlan.noExtHint')
       },
       { code: 'unknown_format' }
     )
@@ -138,7 +140,7 @@ export function resolveReadPlan(rawExt: string, requested: ReadFormat): ReadPlan
   const category = categoryOf(fromExt)
   if (category === null) {
     throw new McpToolError(
-      `不认识的源格式 .${fromExt}`,
+      t('mcp.readPlan.unknownFormat', { ext: fromExt }),
       { fromExt, readable: readableExts() },
       { code: 'unknown_format' }
     )
@@ -149,24 +151,24 @@ export function resolveReadPlan(rawExt: string, requested: ReadFormat): ReadPlan
   if (heavy !== null) {
     const info = HEAVY[heavy]
     throw new McpToolError(
-      `.${fromExt} 读不了：它要先转成别的格式才能拿到文字，而那条路要 ${info.label}` +
-        `（安装包 ${info.size}）。read_document 这一版不做这类转换——` +
-        `「这个文件写了啥」不该牵出一次几百 MB 的下载。`,
+      t('mcp.readPlan.heavyHead', { ext: fromExt, engine: info.label }) +
+        t('mcp.readPlan.heavyMid', { size: info.size }) +
+        t('mcp.readPlan.heavyTail'),
       {
         fromExt,
         engine: heavy,
         download_size: info.size,
         hint:
-          `最省事的是让用户在原应用里另存为 ${info.save}，这些格式不用下引擎就能读；` +
-          `要用 ${info.label} 就改用 convert_file（它会在引擎缺失时点名说要下什么、多大），` +
-          '**并且先让用户确认**再下。'
+          t('mcp.readPlan.heavyHintHead', { save: info.save }) +
+          t('mcp.readPlan.heavyHintMid', { engine: info.label }) +
+          t('mcp.readPlan.heavyHintTail')
       },
       {
         code: 'engine_missing',
         next_steps: [
-          `让用户把这份文件另存为 ${info.save} 再读——那几种这一版直接支持`,
-          `或者改用 convert_file：它会说明要下 ${info.label}（${info.size}），由用户决定要不要下`,
-          '这一步**不要**自己重试：引擎不在位，重试一万次还是同一句拒绝'
+          t('mcp.readPlan.heavyStep1', { save: info.save }),
+          t('mcp.readPlan.heavyStep2', { engine: info.label, size: info.size }),
+          t('mcp.readPlan.heavyStep3')
         ]
       }
     )
@@ -174,12 +176,12 @@ export function resolveReadPlan(rawExt: string, requested: ReadFormat): ReadPlan
 
   if (category !== 'document') {
     throw new McpToolError(
-      `read_document 读的是**文档正文**，而 .${fromExt} 是 ${category} 类，没有「正文」可读`,
+      t('mcp.readPlan.notReadable', { ext: fromExt, category }),
       {
         fromExt,
         category,
         readable: readableExts(),
-        hint: '音视频 / 图片 / 压缩包的信息用 inspect_file 查，要换格式用 convert_file'
+        hint: t('mcp.readPlan.notReadableHint')
       },
       { code: 'not_readable' }
     )
@@ -207,7 +209,7 @@ export function resolveReadPlan(rawExt: string, requested: ReadFormat): ReadPlan
         format: same,
         convert: false,
         toExt: '',
-        warnings: [`.${fromExt} 没有 ${requested} 出口，已按 ${same} 原样返回（没有做任何转换）`]
+        warnings: [t('mcp.readPlan.fallbackNative', { ext: fromExt, requested, same })]
       }
     }
     const ext = FORMAT_EXT[candidate]
@@ -217,7 +219,12 @@ export function resolveReadPlan(rawExt: string, requested: ReadFormat): ReadPlan
         convert: true,
         toExt: ext,
         warnings: [
-          `.${fromExt} 没有 ${requested} 出口，已改按 ${candidate} 返回（可选的是 ${targets.join(' / ')}）`
+          t('mcp.readPlan.fallbackConverted', {
+            ext: fromExt,
+            requested,
+            candidate,
+            targets: targets.join(' / ')
+          })
         ]
       }
     }
@@ -225,7 +232,10 @@ export function resolveReadPlan(rawExt: string, requested: ReadFormat): ReadPlan
 
   // 文档类里每一个扩展名都至少有一个 md/txt/csv 出口，走到这里说明矩阵变了
   throw new McpToolError(
-    `.${fromExt} 没有可读的文本出口（能力矩阵给的是 ${targets.join(' / ') || '空'}）`,
+    t('mcp.readPlan.noTextTarget', {
+      ext: fromExt,
+      targets: targets.join(' / ') || t('mcp.readPlan.emptyList')
+    }),
     { fromExt, targets },
     { code: 'not_readable' }
   )

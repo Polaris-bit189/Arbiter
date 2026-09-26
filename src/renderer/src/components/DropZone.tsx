@@ -1,3 +1,4 @@
+import { t } from '@shared/i18n'
 import { useState } from 'react'
 import { spriteIdFor } from '../lib/icons'
 import { cn } from '../lib/cn'
@@ -109,18 +110,18 @@ export function DropZone({ onDropPaths, compact = false }: Props): React.JSX.Ele
               compact ? 'text-[13px]' : 'text-[15px] tracking-wide'
             )}
           >
-            {over ? '松手，令其归于此处' : '将文件拖入此间，令其归于应有之格式'}
+            {over ? t('shell.dropzone.drop') : t('shell.dropzone.idle')}
           </p>
 
           {!compact && (
             <p className="mt-2 text-[11px] tracking-[0.5px] text-fg-faint">
-              视频 · 音频 · 图片 · 文档 · 电子书 · 压缩包
+              {t('shell.dropzone.kinds')}
             </p>
           )}
 
           {/* webUtils 不可用时拖拽会「毫无反应」，这种静默失败必须显式告知 */}
           {dropPathsUnavailable && (
-            <p className="mt-1.5 text-xs font-medium text-bad">当前环境无法解析拖入文件的路径</p>
+            <p className="mt-1.5 text-xs font-medium text-bad">{t('shell.dropzone.unavailable')}</p>
           )}
         </div>
       </div>

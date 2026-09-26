@@ -98,7 +98,8 @@ function runTests() {
     ['tsx', '--tsconfig', 'tsconfig.test.json', 'scripts/test-pandoc.ts'],
     {
       encoding: 'utf8',
-      shell: true
+      shell: true,
+      maxBuffer: 32 * 1024 * 1024
     }
   )
   const text = (out.stdout ?? '') + (out.stderr ?? '')

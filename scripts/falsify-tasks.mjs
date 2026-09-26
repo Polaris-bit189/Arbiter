@@ -35,8 +35,14 @@ const MUTATIONS = [
     // **脚本报「变异没生效」不是通过**——改被反证覆盖的代码之后必须重跑。
     name: 'setTarget 只改任务、不改队列条目里的 engine',
     file: TASK,
-    from: '    if (this.queue.remove(id)) this.queue.push({ id, engine: task.engine, cost: this.costOf(task) })\n',
-    to: '    // 变异：队列条目原样不动\n',
+    // ⚠️ **锚点必须带上前面那句独一无二的注释。** P0-10 给 `setOptions` 也加了一句
+    // 逐字相同的 `queue.remove/push`（慢预设改变了「占几份」），于是光锚那一行会命中
+    // **2 次**——而 `replace` 只改第一处，症状是「看起来改到了、命中次数却对不上」。
+    // 锚点预检（`npm run test:anchors`）当场抓到了这一条。
+    from:
+      '    // queued 盖掉（`mark` 按 id 合并，后写的赢），界面上这一行会卡在「等待中」不动。\n' +
+      '    if (this.queue.remove(id)) this.queue.push({ id, engine: task.engine, cost: this.costOf(task) })\n',
+    to: '    // queued 盖掉（`mark` 按 id 合并，后写的赢），界面上这一行会卡在「等待中」不动。\n',
     expect: ['排队期间改目标格式：队列条目跟着换桶了（不再卡在旧引擎的队尾）']
   },
   {
@@ -179,8 +185,15 @@ const MUTATIONS = [
   {
     name: '量不到体积时按轻的算（把「宁保守勿乐观」反过来）',
     file: QUEUE,
-    from: `  if (inputBytes === undefined || inputBytes > FAST_LANE_MAX_BYTES) return HEAVY_COST`,
-    to: `  if (inputBytes !== undefined && inputBytes > FAST_LANE_MAX_BYTES) return HEAVY_COST`,
+    // ⚠️ 锚点跟着 P0-10 的改写换过一次形状：`taskCost` 从「`if (...) return HEAVY_COST`」
+    // 变成先算 `base` 再乘预设倍率。**改了被变异覆盖的代码就要重跑锚点预检**，
+    // 否则这类跟丢只会在真跑 `falsify:tasks`（二十多分钟一轮）时才现形。
+    // ⚠️ 锚点**跟着格式化挪过一次**：prettier 后来把这行折成了单行。
+    // 「改了被变异覆盖的代码就要重跑锚点预检」里的那个「改」**包括跑 prettier**——
+    // 它一个字节的语义都没动，但它照样让锚点跟丢。锚点预检 5 秒就能发现，
+    // 而真跑 `falsify:tasks` 要二十多分钟才现形。
+    from: `  const base = inputBytes === undefined || inputBytes > FAST_LANE_MAX_BYTES ? HEAVY_COST : 1`,
+    to: `  const base = inputBytes !== undefined && inputBytes > FAST_LANE_MAX_BYTES ? HEAVY_COST : 1`,
     // ⚠️ `undefined` 走轻档。真实入队路径拿不到体积时就是这个分支——
     // 一段 813 KiB 的 720p 恰好落在轻档，所以这里的保守方向是**有意义**的。
     expect: ['量不到体积时按重的算（宁可慢一点，不拿内存去赌）']
@@ -294,6 +307,87 @@ const MUTATIONS = [
     from: `    if (passLogPrefix !== null) await cleanupPassLog(passLogPrefix)`,
     to: `    if (false) await cleanupPassLog(passLogPrefix)`,
     expect: ['两遍编码：系统临时目录里也没有留下统计文件（-0.log 与 .mbtree 一并删掉）']
+  },
+
+  /* --------------------------------- 编码质量档（P0-10，2026-09-17） */
+  //
+  // ⚠️ 这一节横跨**四个**文件（引擎参数 / 队列记账 / 任务编排 / 调度器），
+  // 也是本套件第一次出现「同一个变异在 `test-tasks` 与 `test-core` 两处都有断言」。
+  // 这里只收 `test:tasks` 那几条——**期望清单只能收实跑观测到的文案**。
+  {
+    // 三个旋钮一起被忽略：改成恒用默认值。这是「接了一半」最典型的形态——
+    // 契约收下了、卡片上写着「预设 slow」、而命令行里仍然是 veryfast。
+    name: '质量档三项全被忽略（x264Args 恒用默认值）',
+    file: FFMPEG,
+    from: `  const preset = quality?.preset ?? DEFAULT_PRESET
+  const crf = quality?.crf ?? DEFAULT_CRF
+  const tune = quality?.tune`,
+    to: `  const preset = DEFAULT_PRESET
+  const crf = DEFAULT_CRF
+  const tune = undefined`,
+    expect: [
+      '⭐ CRF 18 的产物明显大于 CRF 40（这个旋钮真的落在码流上，而不是被当成默认值吃掉）',
+      '⭐ 预设真的落在码流上：ultrafast 与 medium（同 CRF）产出两条不同的视频流',
+      '⭐ 调优真的落在码流上：`-tune grain` 与不调优产出两条不同的流'
+    ]
+  },
+  {
+    // 有质量档时 remux 快车道必须失效：`-c copy` 一个字节都不编，
+    // CRF 与预设无处施加。少了这一条，产物就是源的副本而任务报成功。
+    name: '有质量档时照旧走 remux（三个旋钮全被静默丢掉）',
+    file: FFMPEG_RUN,
+    from: `    quality === undefined &&\n`,
+    to: ``,
+    expect: ['⭐ 质量档让 remux 快车道失效（mp4 → mkv 不带参数是 `-c copy`，带了就必须重编码）']
+  },
+  {
+    // 出口判据只留在 `setOptions` 里是不够的：目标格式在参数设完之后还能改
+    // （`setTarget` 不碰 `options`），所以引擎层必须**再判一次**。
+    name: '引擎层不再判出口（参数设完之后改目标格式就静默失效）',
+    file: FFMPEG_RUN,
+    from: `    if (!supportsQuality(toExt)) {\n`,
+    to: `    if (false) {\n`,
+    // ⚠️ 期望清单**不能**写 `setOptions` 那条「目标格式不支持时 → 拒」：
+    // 那一条走的是 `setOptions` 自己的闸门，与引擎层这一份无关——第一版就是这么写错的，
+    // 那一轮报了「有断言没红」，但红的是期望、不是断言。真正够得着这里的是
+    // **改目标之后再跑**（`setTarget` 不碰 `options`）那两条。
+    expect: [
+      '⭐ 出口竞态：任务**失败**而不是把质量档静默丢掉（webm 走 vp9，认不出这套旋钮）',
+      '出口竞态：错误文案点明「这个出口没有编码质量档」并给出下一步'
+    ]
+  },
+  {
+    name: '质量档与无损裁剪互斥那条删掉（静默二选一）',
+    file: FFMPEG_RUN,
+    from: `    if (clip && trim && trim.mode === 'lossless') {\n      throw new ConversionFailed([
+        '编码质量档与无损裁剪不能同时要求`,
+    to: `    if (false) {\n      throw new ConversionFailed([
+        '编码质量档与无损裁剪不能同时要求`,
+    expect: ['互斥：任务失败而不是静默挑一个']
+  },
+  {
+    // 设了质量档就必须退回 CPU：`-crf` 与 `-cq` 同号不同质、`-preset` 也不是同一个
+    // 词汇表。少了这一支，GPU 开着时三个旋钮会被整条吃掉（NVENC 那格里它们根本不存在）。
+    name: '有质量档时照旧去探显卡（参数被 NVENC 那整条吃掉）',
+    file: FFMPEG_RUN,
+    // ⚠️ 锚点跟着 P5（i18n 阶段码）换过一次形状：那句中文与它的码现在由 `stagePair()`
+    // 一次产出，局部量从 `qualityCpuNote`（字符串）变成了 `qualityCpuPair`（一对）。
+    // **变异本身没变**——它打的仍然是「有质量档时还会去探显卡」这一支。
+    from: `    } else if (quality !== undefined) {\n      emit({ kind: 'indeterminate', ...qualityCpuPair }, true)\n`,
+    to: ``,
+    expect: ['⭐ GPU 互斥：明确说出「本次用 CPU」，而不是静默换一条路']
+  },
+  {
+    // 慢预设更吃内存（实测 placebo 是 veryfast 的 2.3 倍），所以按更多份记账。
+    name: '编码质量档不参与并发记账（慢预设按快档算份数）',
+    file: QUEUE,
+    from: `  const preset = options?.quality?.preset\n  if (preset === undefined) return base`,
+    to: `  const preset = options?.quality?.preset\n  if (preset === undefined || preset !== undefined) return base`,
+    expect: [
+      '慢档按 1.5 倍记账（大文件 3 → 5 份，容量 12 只能开出 2 路）',
+      'placebo 按 2.5 倍记账（大文件 8 份，容量 12 只能开出 1 路）',
+      '记账：慢预设 + 重文件 = 5 份（容量 12 只能开出 2 路）'
+    ]
   }
 ]
 
@@ -374,9 +468,23 @@ function runTests() {
         .trim()
     )
   const total = /通过 (\d+) \/ 失败 (\d+)/.exec(text)
+  const passed = total ? Number(total[1]) : -1
+  // ⚠️ 抠不到汇总行时必须把**原始现场**打出来。`-1` 本身什么都不说明——四种原因的
+  // `-1` 长得一模一样：进程压根起不来 / `tsx` 编译失败 / 断言以**未捕获异常**触发
+  // 把套件崩在半路 / 输出被 `maxBuffer` 截断。而这个脚本跑一轮要几分钟，
+  // 只报一句「测试崩了」等于让下一个人再猜一轮（2026-09-26 就为此白绕过一大圈）。
+  if (passed === -1) {
+    console.error(
+      `  [诊断] 抠不到汇总行：status=${out.status} signal=${out.signal} ` +
+        `error=${out.error ? String(out.error.message ?? out.error) : 'null'} ` +
+        `stdout=${(out.stdout ?? '').length}B stderr=${(out.stderr ?? '').length}B`
+    )
+    console.error('  --- 原始输出尾部 1500 字符 ---')
+    console.error(text.slice(-1500))
+  }
   return {
     reds,
-    passed: total ? Number(total[1]) : -1,
+    passed,
     failed: total ? Number(total[2]) : -1,
     text
   }

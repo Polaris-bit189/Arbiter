@@ -1,4 +1,5 @@
 import { extOf } from '@shared/formats'
+import { t } from '@shared/i18n'
 import { describeError } from './errors'
 import { probeFile } from './inspect'
 import { compareConversion, type Verification, type VerifySide } from './verify'
@@ -34,7 +35,7 @@ export async function selfCheck(sourcePath: string, outputPath: string): Promise
     // 走到这里说明 `probeFile` / `compareConversion` 里出了它们自己没想到的错
     // （两个函数都刻意写成了 total）。兜底成「没查成」而不是把异常扔上去：
     // 产物已经在那儿了，这一次自检失败与它没有任何关系。
-    const reason = `自检自身出错，这一次没查成：${describeError(error)}`
+    const reason = t('mcp.selfCheck.failed', { reason: describeError(error) })
     return compareConversion(blindSide(sourcePath, reason), blindSide(outputPath, reason))
   }
 }

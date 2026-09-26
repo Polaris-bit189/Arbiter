@@ -33,6 +33,8 @@
  * 能在同一个进程里跑的原因——别在这里新引入任何 `src/main/**` 里碰 electron 的模块。
  */
 import type { EngineKey } from '@shared/types'
+// 用户可见文案一律走字典（P6）。这一片是 `mcp.plan.*`，见 `@shared/i18n/parts/mcpJobs.ts`。
+import { t } from '@shared/i18n'
 import { canRemux, remuxEligible } from '../main/engines/ffmpeg'
 import { engineLabel } from '../main/engines/status'
 import {
@@ -158,19 +160,16 @@ function noteOf(
   probe: ProbedFacts | null,
   scoutNote: string | null
 ): string {
-  const lines = [
-    '只预览：没有建任务、没有写任何文件、也没有占用产物名（不会把真实任务的落点挤成 `(1)`）。',
-    '落点是按**此刻**的磁盘与占用情况算的；从这次预览到真跑之间若出现了同名文件，真跑会顺势避让成 `(1)`。'
-  ]
+  const lines = [t('mcp.plan.notePreviewOnly'), t('mcp.plan.noteSnapshot')]
 
   if (cost.engine !== null) {
     const size =
       cost.download_bytes === null
-        ? '安装包体积未知（引擎清单读不到）'
-        : `安装包 ${cost.download_bytes} 字节`
+        ? t('mcp.plan.pkgSizeUnknown')
+        : t('mcp.plan.pkgSize', { bytes: cost.download_bytes })
     lines.push(
-      `这条路要用按需引擎 ${engineLabel(cost.engine)}（${size}）：` +
-        '它**现在已就绪**（没装的话这一步就会被拒，不会给你预览），所以本次不会触发下载。'
+      t('mcp.plan.needEngineHead', { engine: engineLabel(cost.engine), size }) +
+        t('mcp.plan.needEngineTail')
     )
   }
 
@@ -179,22 +178,19 @@ function noteOf(
       remuxEligible(route.fromExt, route.toExt) && canRemux(route.toExt, mediaInfoOf(probe))
     if (!fits) {
       lines.push(
-        `⚠️ mode 给的是 remux，但 .${route.fromExt} → .${route.toExt} 走不通重封装` +
-          '（方向或编解码器不在白名单里）：真跑会**直接失败**，不会自动回退成重编码。' +
-          '要它成功就去掉 mode（用 auto），或者换一个装得下的目标容器。'
+        t('mcp.plan.remuxBlockedHead', { from: route.fromExt, to: route.toExt }) +
+          t('mcp.plan.remuxBlockedMid') +
+          t('mcp.plan.remuxBlockedTail')
       )
     }
   } else if (route.mode === 'reencode') {
-    lines.push(
-      'mode 给的是 reencode：这一步**不会走重封装**，estimate 里那条 high 置信度的重封装区间' +
-        '（秒级）不适用于本次，按重编码那一档看。'
-    )
+    lines.push(t('mcp.plan.reencodeHead') + t('mcp.plan.reencodeTail'))
   }
 
   if (scoutNote !== null) {
     // 侦察那句原话**必须带出来**：估算在探针失败时会退成一条很宽的频带，
     // 而「8 秒到 2 分钟」看上去像是量过了什么。不加这句，agent 会把它当测量值报给用户。
-    lines.push(`侦察没拿到全部信息（estimate 因此只是个宽频带）：${scoutNote}`)
+    lines.push(t('mcp.plan.scoutNote', { note: scoutNote }))
   }
 
   return lines.join('')
