@@ -37,7 +37,7 @@ import { dirname, join, resolve } from 'path'
 import { fileURLToPath } from 'url'
 import { DEFAULT_READ_CHARS, MAX_READ_CHARS } from '../src/mcp/schema'
 import type { EngineKey } from '@shared/types'
-import { clampPriority, pickNextIndex } from '../src/mcp/jobs'
+import { clampPriority, pickNextIndex, progressKey } from '../src/mcp/jobs'
 import { isJsonRpcFrame, protectStdout } from '../src/mcp/stdout'
 import sharp from 'sharp'
 
@@ -2122,7 +2122,11 @@ async function section6DescriptionsAndCost(tmp: string): Promise<void> {
     const listed =
       (
         (await session.call('tools/list')) as {
-          tools?: { name: string; description?: string }[]
+          tools?: {
+            name: string
+            description?: string
+            annotations?: { readOnlyHint?: boolean; destructiveHint?: boolean }
+          }[]
         }
       ).tools ?? []
     const described = new Map(listed.map((tool) => [tool.name, tool.description ?? '']))
@@ -2144,6 +2148,36 @@ async function section6DescriptionsAndCost(tmp: string): Promise<void> {
       '3  前提：确实问到了工具清单（否则上面那条是空的恒真）',
       listed.length > 0 && listed.every((tool) => (tool.description ?? '').length > 10),
       `${listed.length} 个工具`
+    )
+    // `annotations` 的**接线**（2026-09-26 补）。`schema.ts` 那边只有「等级 → hint」的
+    // 映射与分类表（`test-mcp-view.ts` 的 A2 节钉那个），这里问的是**真的发出去了什么**：
+    // 谁把 `server.ts` 那句 `ACCESS_HINTS[TOOL_ACCESS[name]]` 改回手写常量，
+    // 或者干脆不传 `annotations`，下面两条会红。
+    //
+    // 为什么非得有这一条：`readOnlyHint: true` 在客户端那里就是**自动放行**的依据，
+    // 而 `convert_file` 曾经正是标着它、却往用户盘上写产物。
+    const nonRead = schema.TOOL_NAMES.filter((n) => schema.TOOL_ACCESS[n] !== 'read')
+    const falselyReadOnly = listed.filter(
+      (tool) =>
+        schema.TOOL_ACCESS[tool.name as (typeof schema.TOOL_NAMES)[number]] !== 'read' &&
+        tool.annotations?.readOnlyHint === true
+    )
+    check(
+      `3b 会写盘的工具不自称只读（${nonRead.join(' / ')}）`,
+      listed.length > 0 && nonRead.length > 0 && falselyReadOnly.length === 0,
+      falselyReadOnly.length > 0
+        ? `自称只读：${falselyReadOnly.map((tool) => tool.name).join(', ')}`
+        : `${nonRead.length} 个非只读工具`
+    )
+    const missingReadOnly = listed.filter(
+      (tool) =>
+        schema.TOOL_ACCESS[tool.name as (typeof schema.TOOL_NAMES)[number]] === 'read' &&
+        tool.annotations?.readOnlyHint !== true
+    )
+    check(
+      '3c 只读工具都自称只读（少了这一半，把 annotations 整个删掉也会绿）',
+      listed.length > 0 && missingReadOnly.length === 0,
+      missingReadOnly.map((tool) => tool.name).join(', ') || '全部就位'
     )
     // 张冠李戴的典型形态是「两个工具共用一段话」。独立问一遍。
     check(
@@ -2602,6 +2636,46 @@ async function section11Priority(tmp: string): Promise<void> {
     '11h clampPriority：越界夹到 ±100，并且取整',
     clampPriority(9999) === 100 && clampPriority(-9999) === -100 && clampPriority(3.7) === 3,
     `${clampPriority(9999)} / ${clampPriority(-9999)} / ${clampPriority(3.7)}`
+  )
+
+  /* ------------------------------ 进度指纹（P5 的 stageRef） ------------------------------ */
+  //
+  // `progressKey` 决定「这次进度和上次是不是同一件事」——**只报有变化的那些次**。
+  // 它一旦塌成 `[object Object]`，不确定阶段的指纹就全同，agent 只会收到第一条进度，
+  // 之后一直以为任务卡在那里（计划里单列的那颗「静默雷」）。
+
+  check(
+    '11i 两个不同的 stageRef 产生不同的指纹（指纹取的是码，不是那句中文）',
+    progressKey({ kind: 'indeterminate', stage: '同上', stageRef: { key: 'stage.converting' } }) !==
+      progressKey({ kind: 'indeterminate', stage: '同上', stageRef: { key: 'stage.preparing' } })
+  )
+  check(
+    '11j 指纹里带的是那个码，绝不是 [object Object]',
+    (() => {
+      const k = progressKey({
+        kind: 'indeterminate',
+        stage: 'x',
+        stageRef: { key: 'stage.converting' }
+      })
+      return k.includes('stage.converting') && !k.includes('[object Object]')
+    })()
+  )
+  check(
+    '11k 参数进指纹：同一个键、不同的轮次是两条进度（二分搜索每轮都该报）',
+    progressKey({
+      kind: 'indeterminate',
+      stage: 'x',
+      stageRef: { key: 'stage.image.searchQuality', params: { round: 1 } }
+    }) !==
+      progressKey({
+        kind: 'indeterminate',
+        stage: 'x',
+        stageRef: { key: 'stage.image.searchQuality', params: { round: 2 } }
+      })
+  )
+  check(
+    '11l 没有码的老进度对象回落到 stage（升级前入队的任务照样有指纹）',
+    progressKey({ kind: 'indeterminate', stage: '转换中…' }).includes('转换中…')
   )
 
   /* ------------------------------ 端到端：边界上的确定性行为 ------------------------------ */

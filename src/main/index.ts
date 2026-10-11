@@ -4,6 +4,7 @@ import { createWindow } from './window'
 import { registerIpc } from './ipc'
 import { applyCliRequest, focusMainWindow, getTaskManager, mainWindow } from './ipc/tasks'
 import { appPathsFromElectron, setAppPaths } from './core/appPaths'
+import { applyLocale, setSystemLocaleSource } from './core/locale'
 import { flushSettingsSync, getSettings, loadSettingsSync } from './core/settings'
 import { flushHistorySync, loadHistorySync } from './core/history'
 import { parseConvertRequest } from './core/cli'
@@ -133,6 +134,18 @@ if (pdfWorkerRequest !== null) {
     // 于是「首屏看到的是一份空设置 / 空历史」，刷新一下又好了。
     loadSettingsSync()
     loadHistorySync()
+
+    // ---- 界面语言（i18n）----
+    //
+    // 两行缺一不可，而且**必须在 createWindow() 之前**：
+    //   - 第一行装上「系统界面语言」的来源（`app.getLocale()` 在 ready 之前不可靠，所以
+    //     传的是取值函数、不是值）；
+    //   - 第二行按设置算一次并推给 @shared/i18n 那份全局。
+    // 漏了第二行的表现是：用户设了英文，主进程产出的对话框与通知仍是中文，
+    // 而渲染层是英文——**两半说不同的语言**，且没有任何地方报错。
+    // 这条由 test-i18n 的「入口声明」闸门盯着。
+    setSystemLocaleSource(() => app.getLocale())
+    applyLocale()
 
     app.on('browser-window-created', (_, window) => {
       optimizer.watchWindowShortcuts(window)

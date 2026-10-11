@@ -1,5 +1,6 @@
 import { z } from 'zod'
 // 类型导入会被完全擦除，不会把 types.ts 拖成运行时依赖
+import type { ErrorRef } from './i18n/types'
 import type { AfterConvertAction, Category, TaskProgress, TaskStatus } from './types'
 // 这几个是**运行时**常量（不是类型），所以走值导入
 import {
@@ -7,6 +8,8 @@ import {
   CATEGORIES,
   DEINTERLACE_METHODS,
   DENOISE_STRENGTHS,
+  ENCODE_PRESETS,
+  ENCODE_TUNES,
   ENGINE_KEYS,
   IMAGE_FITS,
   MAX_SHARPEN,
@@ -16,16 +19,19 @@ import {
   ROTATE_DEGREES,
   TRIM_MODES
 } from './types'
+import { LOCALES } from './i18n/types'
 // 裁剪时间的上界。与界面共用同一个数，理由见 shared/trim.ts
 import { MAX_TRIM_SEC } from './trim'
 // 新参数的限额。**与界面共用同一个数**，理由同上：两边各写一个上限的表现是
 // 「界面放行了主进程会拒掉的值」——点了应用什么都不发生，而界面上一个字都不提示。
 import {
   MAX_BITRATE_KBPS,
+  MAX_CRF,
   MAX_FILTER_ACTIONS,
   MAX_IMAGE_DIM,
   MAX_TARGET_BYTES,
   MIN_BITRATE_KBPS,
+  MIN_CRF,
   MIN_IMAGE_DIM,
   MIN_TARGET_BYTES
 } from './options'
@@ -109,6 +115,29 @@ export const outputSchema = z
   .refine((value) => (value.targetBytes === undefined) !== (value.bitrateKbps === undefined), {
     message: '目标体积与目标码率必须二选一'
   })
+
+/**
+ * 编码质量档（恒定质量 / 速度档 / 调优）。与 `outputSchema` 同一套理由，
+ * 另有两条是这一份独有的：
+ *
+ * - **CRF 必须是整数**（`.int()`）。它会原样变成 `-crf` 的参数，一个小数在这里
+ *   没有任何意义——ffmpeg 会四舍五入，而用户填的与他得到的对不上。
+ * - **空对象要拒**（`.refine` 的 `Object.keys(...).length > 0`）。一个 `{}` 与
+ *   「没有质量档」在引擎那一侧行为相同，但它在 `TaskOptions` 里**占着一个键**——
+ *   于是卡片上会多出「编码档（未指定）」这一句，而历史页会把它当成「这条用过编码档」。
+ *   两种表示同一件事，迟早有人按其中一种写判据。
+ *
+ * ⚠️ **`preset` / `tune` 的取值是 ffmpeg 自己的词汇表**，枚举直接从
+ * `@shared/types` 的常量数组派生（那里有完整的取舍说明），这里不另写一份。
+ */
+export const qualitySchema = z
+  .object({
+    crf: z.number().int().finite().min(MIN_CRF).max(MAX_CRF).optional(),
+    preset: z.enum(ENCODE_PRESETS).optional(),
+    tune: z.enum(ENCODE_TUNES).optional()
+  })
+  .strict()
+  .refine((value) => Object.keys(value).length > 0, { message: '编码质量档至少要给一项' })
 
 /**
  * 处理链里的一个动作：缩放到指定尺寸。
@@ -227,9 +256,17 @@ export const setOptionsSchema = z
       .object({
         trim: trimSchema.optional(),
         output: outputSchema.optional(),
+        quality: qualitySchema.optional(),
         filters: z.array(filterActionSchema).max(MAX_FILTER_ACTIONS).optional()
       })
       .strict()
+      // 质量档与输出约束**互斥**，由 schema 裁决而不是让下游挑一个。
+      // 让引擎挑的话，两条路都是静默的：挑 CRF 就等于把用户填的体积目标悄悄丢掉，
+      // 挑 `-b:v` 则等于把 CRF 丢掉——而 x264 同时见到两者时会回到质量模式、
+      // 把 `-b:v` 只当上限，产出的体积与目标彻底脱钩而任务报成功。
+      .refine((value) => !(value.output !== undefined && value.quality !== undefined), {
+        message: '编码质量档与输出体积/码率目标不能同时设置'
+      })
       .nullable()
   })
   .strict()
@@ -252,6 +289,7 @@ export const setOptionsSchema = z
  */
 export const settingsPatchSchema = z
   .object({
+    language: z.enum(LOCALES).optional(),
     outputDir: z.string().max(4096).nullable().optional(),
     outputBesideSource: z.boolean().optional(),
     onConflict: z.enum(['rename', 'overwrite', 'skip']).optional(),
@@ -340,6 +378,7 @@ const lenientDirs = z
  */
 
 export const settingsSchema = z.object({
+  language: z.enum(LOCALES).optional().catch(undefined),
   outputDir: z.string().max(4096).nullable().optional().catch(undefined),
   outputBesideSource: z.boolean().optional().catch(undefined),
   onConflict: z.enum(['rename', 'overwrite', 'skip']).optional().catch(undefined),
@@ -490,6 +529,8 @@ export interface TaskPatch {
   status?: TaskStatus
   progress?: TaskProgress | null
   error?: string | null
+  /** 与 `error` 同义的**码**（P7）。见 `Task.errorRef`；老任务没有这个键，渲染层回落 `error` */
+  errorRef?: ErrorRef | null
   logTail?: string[] | null
   outputPath?: string | null
   sizeBytes?: number | null
@@ -504,8 +545,13 @@ export interface TasksPatchMessage {
 
 export interface AddResult {
   added: number
-  /** 被拒绝的文件及原因，UI 需要逐条提示，不能静默吞掉 */
-  rejected: { path: string; reason: string }[]
+  /**
+   * 被拒绝的文件及原因，UI 需要逐条提示，不能静默吞掉。
+   *
+   * `reason` 恒为中文（老路径），`reasonRef` 是它的码——渲染层优先用码，
+   * 这样切语言时那行提示也会跟着变（与 `Task.errorRef` 同一手法）。
+   */
+  rejected: { path: string; reason: string; reasonRef?: ErrorRef }[]
 }
 
 /** 关于页要展示的版本信息。全仓此前没有任何地方把版本号暴露给渲染层。 */

@@ -1,3 +1,4 @@
+import { t, type KeysOf } from './i18n'
 import type { Category, TrimOptions } from './types'
 
 /**
@@ -46,10 +47,10 @@ function seconds(value: number): string {
 }
 
 /** 模式的中文名。**无损那句括注是承重的**：见 `describeTrim` 的注释 */
-const MODE_LABEL = {
-  lossless: '无损（起点对齐关键帧）',
-  exact: '精确'
-} as const
+const MODE_LABEL: Record<TrimOptions['mode'], KeysOf<'shared.trimMode.'>> = {
+  lossless: 'shared.trimMode.lossless',
+  exact: 'shared.trimMode.exact'
+}
 
 /**
  * 一行参数摘要，例如 `裁 3.0s–8.0s · 无损（起点对齐关键帧）`。
@@ -60,7 +61,12 @@ const MODE_LABEL = {
  * 不能只在设置它的那一刻提示一次——那张卡片会一直挂在队列里，而摘要就是它的全部记忆。
  */
 export function describeTrim(trim: TrimOptions): string {
-  return `裁 ${seconds(trim.start)}–${seconds(trim.end)} · ${MODE_LABEL[trim.mode]}`
+  // ⚠️ 分隔符（空格-中点-空格）与那个短横都是**承重的**，test-core.ts 有整句钉死的断言。
+  return t('shared.trim.cut', {
+    start: seconds(trim.start),
+    end: seconds(trim.end),
+    mode: t(MODE_LABEL[trim.mode])
+  })
 }
 
 /**

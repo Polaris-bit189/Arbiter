@@ -1,3 +1,4 @@
+import { t } from '@shared/i18n'
 import { useCallback, useEffect, useMemo, useRef } from 'react'
 import { targetsFor, targetsForCategory } from '@shared/formats'
 import { CATEGORIES, type Category } from '@shared/types'
@@ -97,7 +98,7 @@ export function WorkbenchPage(): React.JSX.Element {
     prevRunning.current = running
     if (!wasRunning || running > 0 || queued > 0) return
     if (total === 0 || done !== total) return
-    showToast('万般格式，各归其所')
+    showToast(t('workbench.toast.settled'))
   }, [running, queued, total, done, showToast])
 
   /**
@@ -119,7 +120,7 @@ export function WorkbenchPage(): React.JSX.Element {
     if (categoryKey === '') return []
     return (categoryKey.split(',') as Category[]).map((category) => ({
       category,
-      label: CATEGORY_LABEL[category],
+      label: t(CATEGORY_LABEL[category]),
       items: targetsForCategory(category)
     }))
   }, [categoryKey])
@@ -144,7 +145,9 @@ export function WorkbenchPage(): React.JSX.Element {
       applied += 1
     }
     showToast(
-      applied > 0 ? `已将 ${applied} 个目标格式设为 ${toExt.toUpperCase()}` : '没有适用此行事的文件'
+      applied > 0
+        ? t('workbench.toast.applied', { count: applied, ext: toExt.toUpperCase() })
+        : t('workbench.toast.noApplicable')
     )
   }
 
@@ -168,17 +171,20 @@ export function WorkbenchPage(): React.JSX.Element {
       if (result === null) return
 
       if (result.added === 0 && result.rejected.length === 0) {
-        showToast('此处没有认得的文件')
+        showToast(t('workbench.toast.noKnownFiles'))
         return
       }
       if (result.added === 0) {
-        showToast(`一个文件也没收进来，${result.rejected.length} 项被跳过（见下方清单）`)
+        showToast(t('workbench.toast.allSkipped', { count: result.rejected.length }))
         return
       }
       showToast(
         result.rejected.length > 0
-          ? `收入 ${result.added} 个，另有 ${result.rejected.length} 项没有收入（见下方清单）`
-          : `收入 ${result.added} 个，可以开始调律了`
+          ? t('workbench.toast.partialAdded', {
+              added: result.added,
+              rejected: result.rejected.length
+            })
+          : t('workbench.toast.added', { count: result.added })
       )
     },
     [showToast]
@@ -209,7 +215,7 @@ export function WorkbenchPage(): React.JSX.Element {
     const ids = order.filter((id) => byId[id]?.status === 'running')
     if (ids.length === 0) return
     void cancel(ids).then(() => {
-      showToast(`已取消 ${ids.length} 个转换（源文件一个字节没动，可以重跑）`)
+      showToast(t('workbench.toast.canceled', { count: ids.length }))
     })
   }, [cancel, showToast])
 
@@ -223,10 +229,13 @@ export function WorkbenchPage(): React.JSX.Element {
     <div className="flex h-full min-h-0 flex-col px-6 pb-4 pt-5">
       <header className="shrink-0">
         <div className="flex items-baseline justify-between gap-4">
-          <h1 className="grad-gold-text font-display text-2xl tracking-[0.06em]">调律工作台</h1>
+          <h1 className="grad-gold-text font-display text-2xl tracking-[0.06em]">
+            {t('workbench.pageTitle')}
+          </h1>
 
           <span className="shrink-0 text-[11px] tracking-[0.5px] text-fg-muted">
-            文件 <span className="font-mono text-[13px] text-gold">{total}</span>
+            {t('workbench.headerFiles')}{' '}
+            <span className="font-mono text-[13px] text-gold">{total}</span>
             {/* 源文件的体积主进程没有回传（`Task` 上只有产物体积），
                 所以这里统计的是「已经转出来的总量」——一个都没转完时干脆不显示 */}
             {totalBytes > 0 && (
@@ -253,12 +262,12 @@ export function WorkbenchPage(): React.JSX.Element {
       <div className="mt-3 flex shrink-0 items-center gap-2">
         <button
           type="button"
-          title="收入文件（Ctrl+O）"
+          title={t('workbench.pickFilesTitle')}
           onClick={() => void collect(pickFiles)}
           className="btn-secondary shrink-0"
         >
           <Icon name="add-file" size={18} />
-          收入文件
+          {t('workbench.pickFiles')}
         </button>
 
         {/* 「打开文件夹」与「收入文件」的差别不只是选什么：它会**扫子文件夹**，
@@ -267,12 +276,12 @@ export function WorkbenchPage(): React.JSX.Element {
             用户点之前就能看见，而不是点完才发现自己收进来三千个文件 */}
         <button
           type="button"
-          title="选一个文件夹：会扫它的子文件夹，先把「将加入 N 个文件」给你确认一次，点了才入队"
+          title={t('workbench.pickFolderTitle')}
           onClick={() => void collect(pickFolder)}
           className="btn-secondary shrink-0"
         >
           <Icon name="folder" size={18} />
-          收入文件夹
+          {t('workbench.pickFolder')}
         </button>
 
         <button
@@ -281,11 +290,13 @@ export function WorkbenchPage(): React.JSX.Element {
           onClick={() => void clearFinished()}
           className="btn-ghost shrink-0 disabled:cursor-not-allowed disabled:opacity-40"
         >
-          清空
+          {t('workbench.clear')}
         </button>
 
         <div className="ml-auto flex shrink-0 items-center gap-2">
-          <span className="text-[11px] tracking-[0.5px] text-fg-faint">全部转为</span>
+          <span className="text-[11px] tracking-[0.5px] text-fg-faint">
+            {t('workbench.applyAll')}
+          </span>
           <select
             value=""
             disabled={globalGroups.length === 0}
@@ -295,7 +306,7 @@ export function WorkbenchPage(): React.JSX.Element {
             {/* 受控组件，值恒为空串：选完一项之后 select 自己弹回这一行，
                 不会留下一个「当前选中」的假状态——它不是一次选择，是一次批量动作 */}
             <option value="" disabled>
-              选择目标格式
+              {t('workbench.selectTarget')}
             </option>
             {globalGroups.map((group) => (
               <optgroup key={group.category} label={group.label}>
@@ -321,36 +332,38 @@ export function WorkbenchPage(): React.JSX.Element {
         className="mt-3 grid shrink-0 items-center gap-3 border-b border-b-line px-2 pb-2 text-[11px] tracking-[0.5px] text-fg-faint"
         style={{ gridTemplateColumns: QUEUE_COLUMNS }}
       >
-        <span>文件</span>
-        <span>大小</span>
-        <span>目标格式</span>
-        <span>状态</span>
-        <span className="text-right">操作</span>
+        <span>{t('workbench.colFile')}</span>
+        <span>{t('workbench.colSize')}</span>
+        <span>{t('workbench.colTarget')}</span>
+        <span>{t('workbench.colStatus')}</span>
+        <span className="text-right">{t('workbench.colActions')}</span>
       </div>
 
       <TaskList />
 
       <footer className="mt-3 flex shrink-0 items-center gap-3 pt-3">
-        <span className="text-[11px] tracking-[0.5px] text-fg-faint">一切转换，尽在本机之中</span>
+        <span className="text-[11px] tracking-[0.5px] text-fg-faint">{t('workbench.slogan')}</span>
 
         {/* 「运行中 N」从任务镜像里数出来，不读设置里的静态上限：
             一批小文件两百毫秒转完、五行同时变绿时，旁边写着「并发 4」
             看起来就像限流根本没生效。上限是常数，运行中才是事实 */}
         <span className="text-[11px] text-fg-muted">
-          运行中 <span className="font-mono text-gold">{running}</span>
+          {t('workbench.running')} <span className="font-mono text-gold">{running}</span>
           <span className="mx-1 text-fg-faint">/</span>
-          上限 <span className="font-mono">{maxConcurrent}</span>
+          {t('workbench.limit')} <span className="font-mono">{maxConcurrent}</span>
         </span>
 
         <button
           type="button"
-          title="开始调律（Enter）"
+          title={t('workbench.startTitle')}
           disabled={queued === 0}
           onClick={() => void start()}
           className="btn-primary ml-auto shrink-0"
         >
           <Icon name="convert" size={18} />
-          开始调律（{queued}）
+          {t('workbench.startLead')}
+          {queued}
+          {t('workbench.startTail')}
         </button>
       </footer>
     </div>

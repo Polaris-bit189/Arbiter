@@ -22,6 +22,8 @@ export const AUTO_CONCURRENCY = Math.min(4, Math.max(1, cpus().length - 1))
 
 function defaults(): Settings {
   return {
+    // 跟随系统：中文系统用中文、其余用英文。让绝大多数人第一次打开就是对的。
+    language: 'system',
     outputDir: null,
     outputBesideSource: true,
     onConflict: 'rename',
@@ -76,6 +78,7 @@ function parseSettings(raw: unknown): Settings | null {
     // 布尔字段用 `??` 是安全的：`false` 是合法值，只有真正的 `undefined` 会被换掉。
     // 写成 `||` 就会把用户选过的 `false` 悄悄改回 `true`——一个静默回退。
     // 「有没有设过指定目录」只能看 outputDir 是不是 null，所以那一项单独判 undefined。
+    language: file.language ?? base.language,
     outputDir: file.outputDir === undefined ? base.outputDir : file.outputDir,
     outputBesideSource: file.outputBesideSource ?? base.outputBesideSource,
     onConflict: file.onConflict ?? base.onConflict,

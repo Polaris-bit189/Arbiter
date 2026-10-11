@@ -1,3 +1,4 @@
+import { t, type KeysOf } from '@shared/i18n'
 import { useState } from 'react'
 import {
   DEFAULT_TARGET_LUFS,
@@ -65,43 +66,49 @@ import { OptionsSection } from './OptionsSection'
 
 /* ------------------------------------------------------------------ 文案与次序 */
 
-/** 三个档位的中文说明。写在数据旁边而不是 JSX 里，是为了让「有几档」只有一处。 */
-const FIT_LABEL: Record<ImageFit, string> = {
-  inside: '装进框内',
-  cover: '裁切填满',
-  fill: '拉伸'
+/**
+ * 三张「有几档」的表——存的是**字典键**，取词处写 `t(FIT_LABEL[fit])`。
+ *
+ * 键值对写在数据旁边而不是 JSX 里，是为了让「有几档」只有一处；写成 `Record<…, KeysOf<…>>`
+ * 而不是 `Record<…, string>`，是为了让「加了一档却忘了配文案」直接是编译错误。
+ */
+const FIT_LABEL: Record<ImageFit, KeysOf<'filters.fit.'>> = {
+  inside: 'filters.fit.inside',
+  cover: 'filters.fit.cover',
+  fill: 'filters.fit.fill'
 }
 
-const FIT_HINT: Record<ImageFit, string> = {
-  inside: '保持比例，长边顶到框为止，不裁也不变形（最常用）。',
-  cover: '保持比例，填满整个框，多出来的部分裁掉。',
-  fill: '拉伸到正好这个尺寸，会变形。'
+const FIT_HINT: Record<ImageFit, KeysOf<'filters.fitHint.'>> = {
+  inside: 'filters.fitHint.inside',
+  cover: 'filters.fitHint.cover',
+  fill: 'filters.fitHint.fill'
 }
 
 /**
- * 三档降噪的中文名。
+ * 三档降噪的名字。
  *
  * ⚠️ 与 `shared/options.ts` 里那份 `DENOISE_LABEL` **是同一组词**（`describeAction`
  * 生成摘要时用它，所以两处必须一模一样）。它没有导出，共享不了，只能各写一份——
- * 两边都是 `Record<DenoiseStrength, string>`，加第四档时**两边都会编译不过**。
+ * 两边都是 `Record<DenoiseStrength, …>`，加第四档时**两边都会编译不过**。
+ * 中文那一侧同样是两份（`filters.denoise.*` 与 `shared.denoise.*`），改一处要一起改。
  */
-const DENOISE_LABEL: Record<DenoiseStrength, string> = {
-  light: '轻',
-  medium: '中',
-  strong: '重'
+const DENOISE_LABEL: Record<DenoiseStrength, KeysOf<'filters.denoise.'>> = {
+  light: 'filters.denoise.light',
+  medium: 'filters.denoise.medium',
+  strong: 'filters.denoise.strong'
 }
 
 type ActionKind = FilterAction['kind']
 
 /** 动作的短名。**与 `describeAction` 的输出不是一回事**：那个是整句摘要（「缩到 1920×1080」），
  *  这里只用来指认「第几步是哪个动作」（菜单项与报错里）。 */
-const KIND_LABEL: Record<ActionKind, string> = {
-  resize: '缩放',
-  deinterlace: '去隔行',
-  denoise: '降噪',
-  sharpen: '锐化',
-  rotate: '旋转',
-  loudnorm: '响度归一化'
+const KIND_LABEL: Record<ActionKind, KeysOf<'filters.kind.'>> = {
+  resize: 'filters.kind.resize',
+  deinterlace: 'filters.kind.deinterlace',
+  denoise: 'filters.kind.denoise',
+  sharpen: 'filters.kind.sharpen',
+  rotate: 'filters.kind.rotate',
+  loudnorm: 'filters.kind.loudnorm'
 }
 
 /**
@@ -245,20 +252,21 @@ function parse(draft: DraftAction): Parsed {
     case 'resize': {
       const width = draft.width.trim()
       const height = draft.height.trim()
-      if (width === '' && height === '')
-        return { ok: false, issue: '宽高至少填一个（另一个留空则按比例算）' }
+      if (width === '' && height === '') return { ok: false, issue: t('filters.resizeBothEmpty') }
 
-      for (const [label, text] of [
-        ['宽', width],
-        ['高', height]
+      for (const [labelKey, text] of [
+        ['filters.dim.width', width],
+        ['filters.dim.height', height]
       ] as const) {
         if (text === '') continue
         const value = Number(text)
-        if (!Number.isInteger(value)) return { ok: false, issue: `${label}只能填整数像素` }
+        const label = t(labelKey)
+        if (!Number.isInteger(value))
+          return { ok: false, issue: t('filters.dimInteger', { label }) }
         if (value < MIN_IMAGE_DIM)
-          return { ok: false, issue: `${label}至少是 ${MIN_IMAGE_DIM} 像素` }
+          return { ok: false, issue: t('filters.dimMin', { label, min: MIN_IMAGE_DIM }) }
         if (value > MAX_IMAGE_DIM)
-          return { ok: false, issue: `${label}不能超过 ${MAX_IMAGE_DIM} 像素` }
+          return { ok: false, issue: t('filters.dimMax', { label, max: MAX_IMAGE_DIM }) }
       }
 
       // 逐字段显式构造（不用展开）：`filterActionSchema` 是 `.strict()` 的，
@@ -276,21 +284,30 @@ function parse(draft: DraftAction): Parsed {
     }
     case 'sharpen': {
       const text = draft.amount.trim()
-      if (text === '') return { ok: false, issue: '锐化强度不能为空' }
+      if (text === '') return { ok: false, issue: t('filters.sharpenEmpty') }
       const value = Number(text)
-      if (!Number.isFinite(value)) return { ok: false, issue: '只能填数字' }
+      if (!Number.isFinite(value)) return { ok: false, issue: t('filters.notANumber') }
       if (value < MIN_SHARPEN || value > MAX_SHARPEN) {
-        return { ok: false, issue: `锐化强度要在 ${MIN_SHARPEN}~${MAX_SHARPEN} 之间` }
+        return {
+          ok: false,
+          issue: t('filters.sharpenRangeIssue', { min: MIN_SHARPEN, max: MAX_SHARPEN })
+        }
       }
       return { ok: true, action: { kind: 'sharpen', amount: value } }
     }
     case 'loudnorm': {
       const text = draft.targetLufs.trim()
-      if (text === '') return { ok: false, issue: '目标响度不能为空' }
+      if (text === '') return { ok: false, issue: t('filters.loudnormEmpty') }
       const value = Number(text)
-      if (!Number.isFinite(value)) return { ok: false, issue: '只能填数字' }
+      if (!Number.isFinite(value)) return { ok: false, issue: t('filters.notANumber') }
       if (value < MIN_TARGET_LUFS || value > MAX_TARGET_LUFS) {
-        return { ok: false, issue: `目标响度要在 ${MIN_TARGET_LUFS}~${MAX_TARGET_LUFS} LUFS 之间` }
+        return {
+          ok: false,
+          issue: t('filters.loudnormRangeIssue', {
+            min: MIN_TARGET_LUFS,
+            max: MAX_TARGET_LUFS
+          })
+        }
       }
       return { ok: true, action: { kind: 'loudnorm', targetLufs: value } }
     }
@@ -320,7 +337,11 @@ function compile(steps: readonly Step[]): Compiled {
     if (!parsed.ok) {
       return {
         ok: false,
-        reason: `第 ${index + 1} 步「${KIND_LABEL[step.action.kind]}」：${parsed.issue}`
+        reason: t('filters.stepIssue', {
+          index: index + 1,
+          kind: t(KIND_LABEL[step.action.kind]),
+          issue: parsed.issue
+        })
       }
     }
     actions.push(parsed.action)
@@ -433,7 +454,8 @@ function Editor({
   onChange: (action: DraftAction) => void
 }): React.JSX.Element {
   const action = step.action
-  const at = (field: string): string => `第 ${index + 1} 步的${field}`
+  const at = (field: KeysOf<'filters.field.'>): string =>
+    t('filters.stepField', { index: index + 1, field: t(field) })
 
   switch (action.kind) {
     case 'resize': {
@@ -445,22 +467,22 @@ function Editor({
               type="text"
               inputMode="numeric"
               value={action.width}
-              aria-label={at('宽度（像素）')}
-              placeholder="留空"
+              aria-label={at('filters.field.width')}
+              placeholder={t('filters.resizePlaceholder')}
               onChange={(e) => onChange({ ...action, width: e.target.value })}
               className={INPUT}
             />
-            <span className="text-xs text-fg-faint">宽</span>
+            <span className="text-xs text-fg-faint">{t('filters.dim.width')}</span>
             <input
               type="text"
               inputMode="numeric"
               value={action.height}
-              aria-label={at('高度（像素）')}
-              placeholder="留空"
+              aria-label={at('filters.field.height')}
+              placeholder={t('filters.resizePlaceholder')}
               onChange={(e) => onChange({ ...action, height: e.target.value })}
               className={INPUT}
             />
-            <span className="text-xs text-fg-faint">高</span>
+            <span className="text-xs text-fg-faint">{t('filters.dim.height')}</span>
 
             {/* ⚠️ 默认**开**。sharp 自己的默认是「放大」——「长边 1920」会把一张 800px 的
                 图拉大成 1920，体积涨、画质降、用户没要求，而且**不报错**。 */}
@@ -470,7 +492,7 @@ function Editor({
                 checked={action.withoutEnlargement}
                 onChange={(e) => onChange({ ...action, withoutEnlargement: e.target.checked })}
               />
-              不放大
+              {t('filters.resizeNoEnlarge')}
             </label>
           </div>
 
@@ -481,17 +503,14 @@ function Editor({
                 active={action.fit === fit}
                 onClick={() => onChange({ ...action, fit })}
               >
-                {FIT_LABEL[fit]}
+                {t(FIT_LABEL[fit])}
               </Pill>
             ))}
           </div>
 
           <p className="mt-1.5 text-[11px] leading-relaxed text-fg-faint">
-            {bothDims
-              ? FIT_HINT[action.fit]
-              : '只填一个维度时，另一侧按原比例算；「裁切填满 / 拉伸」只在宽高都填了时才生效。'}
-            {action.withoutEnlargement &&
-              ' 「不放大」开着时，比目标尺寸小的那一侧保持原样、不会被拉大。'}
+            {bothDims ? t(FIT_HINT[action.fit]) : t('filters.resizeHintOneDim')}
+            {action.withoutEnlargement && t('filters.resizeHintNoEnlarge')}
           </p>
         </>
       )
@@ -514,8 +533,7 @@ function Editor({
           {/* 「有滤镜」不等于「能用」，也不等于「自动判断得了」——这两句都是实测的结论
               （见 `@shared/types` 的 `DEINTERLACE_METHODS` 与 docs/RESEARCH.md §3）。 */}
           <p className="mt-1.5 text-[11px] leading-relaxed text-fg-faint">
-            两档都实测可用。ffmpeg 的自动判断（`idet` / `detelecine`）实测缺失，所以「这段到底
-            是不是隔行的」要你自己看着办，拿不准就用 yadif。
+            {t('filters.deinterlaceHint')}
           </p>
         </>
       )
@@ -530,13 +548,12 @@ function Editor({
                 active={action.strength === strength}
                 onClick={() => onChange({ ...action, strength })}
               >
-                {DENOISE_LABEL[strength]}
+                {t(DENOISE_LABEL[strength])}
               </Pill>
             ))}
           </div>
           <p className="mt-1.5 text-[11px] leading-relaxed text-fg-faint">
-            降噪越重越慢、细节也越少。它对**本来干净**的素材是纯损失，所以这一步默认不在链上；
-            加了它是有意的取舍，不是「顺手加一个会更好」。
+            {t('filters.denoiseHint')}
           </p>
         </>
       )
@@ -549,15 +566,14 @@ function Editor({
               type="text"
               inputMode="decimal"
               value={action.amount}
-              aria-label={at('锐化强度')}
+              aria-label={at('filters.field.sharpen')}
               onChange={(e) => onChange({ ...action, amount: e.target.value })}
               className={INPUT}
             />
-            <span className="text-xs text-fg-faint">强度</span>
+            <span className="text-xs text-fg-faint">{t('filters.sharpenAmountUnit')}</span>
           </div>
           <p className="mt-1.5 text-[11px] leading-relaxed text-fg-faint">
-            范围 {MIN_SHARPEN}~{MAX_SHARPEN}，1 是「看得出来」的起点。它会把噪点一起放大，
-            所以要排在降噪之后（规范次序已经这么排了）。
+            {t('filters.sharpenHint', { min: MIN_SHARPEN, max: MAX_SHARPEN })}
           </p>
         </>
       )
@@ -570,15 +586,18 @@ function Editor({
               type="text"
               inputMode="decimal"
               value={action.targetLufs}
-              aria-label={at('目标响度')}
+              aria-label={at('filters.field.loudnorm')}
               onChange={(e) => onChange({ ...action, targetLufs: e.target.value })}
               className={INPUT}
             />
             <span className="text-xs text-fg-faint">LUFS</span>
           </div>
           <p className="mt-1.5 text-[11px] leading-relaxed text-fg-faint">
-            范围 {MIN_TARGET_LUFS}~{MAX_TARGET_LUFS}，默认 {DEFAULT_TARGET_LUFS} LUFS
-            （流媒体平台的事实标准）。它作用在**音频流**上，视频文件里的音轨照样能归一化。
+            {t('filters.loudnormHint', {
+              min: MIN_TARGET_LUFS,
+              max: MAX_TARGET_LUFS,
+              def: DEFAULT_TARGET_LUFS
+            })}
           </p>
         </>
       )
@@ -599,8 +618,7 @@ function Editor({
           </div>
           {/* 与「旋转元数据」划清界限：这条是承重的，见 `@shared/types` 的 `RotateAction` */}
           <p className="mt-1.5 text-[11px] leading-relaxed text-fg-faint">
-            这是**真的重排像素**，所以必须重新编码。手机视频里那个记在容器里的旋转标记是另一回事
-            ——`-c copy` 会把它原样搬走，有的播放器转、有的不转。
+            {t('filters.rotateHint')}
           </p>
         </>
       )
@@ -628,7 +646,7 @@ function StepRow({
   // 摘要走 `describeAction`——**与队列卡片、历史页上那一行是同一句话**。数值还没填对时
   // **不编一个数**（「锐化 1」而框里是空的，就是本项目最忌讳的「不报错的错误答案」），
   // 只把动作名摆出来，具体哪儿不对由下面那句校验原因说清。
-  const summary = parsed.ok ? describeAction(parsed.action) : `${KIND_LABEL[step.action.kind]} —`
+  const summary = parsed.ok ? describeAction(parsed.action) : `${t(KIND_LABEL[step.action.kind])} —`
 
   return (
     <div className="mt-2 rounded border border-line bg-canvas px-2 py-1.5">
@@ -639,29 +657,29 @@ function StepRow({
         </span>
         <button
           type="button"
-          title="上移（排在上面的先执行）"
+          title={t('filters.moveUpTitle')}
           disabled={index === 0}
           onClick={() => onMove(-1)}
           className={ROW_BUTTON}
         >
-          上移
+          {t('filters.moveUp')}
         </button>
         <button
           type="button"
-          title="下移"
+          title={t('filters.moveDownTitle')}
           disabled={index === count - 1}
           onClick={() => onMove(1)}
           className={ROW_BUTTON}
         >
-          下移
+          {t('filters.moveDown')}
         </button>
         <button
           type="button"
-          title="从链上删掉这一步"
+          title={t('filters.removeTitle')}
           onClick={onRemove}
           className={cn(ROW_BUTTON, 'hover:text-bad')}
         >
-          删除
+          {t('filters.remove')}
         </button>
       </div>
 
@@ -763,9 +781,9 @@ export function FiltersSection({ task }: { task: Task }): React.JSX.Element {
 
   return (
     <OptionsSection
-      title="处理链（从上到下依次执行）"
+      title={t('filters.title')}
       reason={compiled.ok ? null : compiled.reason}
-      failedText={failed ? '没能设上——这条任务正在转换中，或这一步不适用于它的类别' : ''}
+      failedText={failed ? t('filters.applyFailed') : ''}
       busy={busy}
       canClear={current.length > 0}
       onApply={() => void apply()}
@@ -778,7 +796,7 @@ export function FiltersSection({ task }: { task: Task }): React.JSX.Element {
       <div className={cn(busy && 'pointer-events-none opacity-60')}>
         {steps.length === 0 ? (
           <p className="mt-1.5 text-[11px] leading-relaxed text-fg-faint">
-            链上还没有步骤。从下面挑一个动作加进来——加进来的每一步都会按这个顺序执行。
+            {t('filters.emptyChain')}
           </p>
         ) : (
           steps.map((step, index) => (
@@ -794,18 +812,18 @@ export function FiltersSection({ task }: { task: Task }): React.JSX.Element {
           ))
         )}
 
-        <p className="mt-2 text-[11px] text-fg-faint">添加一步：</p>
+        <p className="mt-2 text-[11px] text-fg-faint">{t('filters.addStep')}</p>
         <div className="mt-1 flex flex-wrap items-center gap-1.5">
           {addable.map((kind) => (
             <Pill key={kind} active={false} disabled={busy || atMax} onClick={() => add(kind)}>
-              + {KIND_LABEL[kind]}
+              + {t(KIND_LABEL[kind])}
             </Pill>
           ))}
         </div>
 
         {atMax && (
           <p className="mt-1.5 text-[11px] text-fg-faint">
-            链上已经有 {MAX_FILTER_ACTIONS} 步，到上限了（更长的链必然是算错了的配方）。
+            {t('filters.atMax', { count: MAX_FILTER_ACTIONS })}
           </p>
         )}
 
@@ -813,15 +831,15 @@ export function FiltersSection({ task }: { task: Task }): React.JSX.Element {
             `canUseAction` 的结果里派生的，不是另写一张说明表——说明表迟早与判据漂移。 */}
         {hidden.length > 0 && (
           <p className="mt-1.5 text-[11px] leading-relaxed text-fg-faint">
-            「{hidden.map((kind) => KIND_LABEL[kind]).join(' / ')}」在
-            {CATEGORY_LABEL[task.category]}这一类上放不下，所以不在上面。
+            {t('filters.hiddenUnavailable', {
+              kinds: hidden.map((kind) => t(KIND_LABEL[kind])).join(' / '),
+              category: t(CATEGORY_LABEL[task.category])
+            })}
           </p>
         )}
       </div>
 
-      {unsaved && (
-        <p className="mt-2 text-[11px] text-gold-pale">链上的改动还没生效——点「应用」才会提交。</p>
-      )}
+      {unsaved && <p className="mt-2 text-[11px] text-gold-pale">{t('filters.unsaved')}</p>}
     </OptionsSection>
   )
 }

@@ -41,6 +41,7 @@
 import { spawn } from 'child_process'
 
 import { MCP_ENTRY, entryEnv, expectedEntryPath, resolveTarget } from './target.mjs'
+import { t } from './i18n.mjs'
 
 /** 诊断一律走 stderr，理由见文件头。 */
 const log = (message) => process.stderr.write(`[arbiter-plugin] ${message}\n`)
@@ -52,45 +53,45 @@ const debug = (message) => {
 const target = resolveTarget(MCP_ENTRY)
 
 if (!target) {
-  log('没有在本机找到可用的 Arbiter。')
+  log(t('noTargetTitle'))
   log('')
-  log('这个插件本身不含转换引擎——它要借用一份 Arbiter：装好的应用，或一个构建过的仓库。')
-  log('请先装应用：')
-  log('  Windows: 从 Releases 下载 Arbiter-Setup-*.exe 安装')
-  log('  macOS:   把 Arbiter.app 拖进 /Applications')
+  log(t('noTargetBody'))
+  log(t('noTargetInstall'))
+  log(t('noTargetWindows'))
+  log(t('noTargetMac'))
   log('')
-  log('已经装了却仍然报这一条，用 ARBITER_HOME 显式指路（写进 .mcp.json 的 env 里）：')
-  log('  ARBITER_HOME=C:\\Users\\<你>\\AppData\\Local\\Programs\\Arbiter')
+  log(t('noTargetHomeHint'))
+  log(t('noTargetHomeExample'))
   process.exit(1)
 }
 
 if (!target.electron) {
-  log(`找到了 ${target.root}，但里面没有 Electron 可执行文件。`)
-  log('（开发形态下通常是 `npm i` 还没跑，或者 electron 没装上。）')
+  log(t('noElectron', { root: target.root }))
+  log(t('noElectronDev'))
   process.exit(1)
 }
 
 // 判据是 `usable`，**不是** `existsSync(target.entry)`——打包形态下那个路径指向
 // asar 内部，普通 Node 的 `existsSync` 恒为 false（见 `target.mjs` / `asar.mjs` 的说明）。
 if (!target.usable) {
-  log(`找到了 ${target.root}，但没有 MCP 入口。`)
-  log(`  期望的位置：${expectedEntryPath(target, MCP_ENTRY)}`)
+  log(t('noEntry', { root: target.root }))
+  log(t('noEntryExpected', { path: expectedEntryPath(target, MCP_ENTRY) }))
   if (target.kind === 'repo') {
-    log('这是仓库形态，先在仓库根跑一次 `npm run build` 生成 out/main/mcp.js。')
-    log('（注意 `npm run build` 会先做 typecheck；只想快的话用 `npx electron-vite build`。）')
+    log(t('noEntryRepo'))
+    log(t('noEntryRepoFast'))
   } else {
-    log('这个安装包可能早于 MCP 功能（< 0.2.0），装新版本即可。')
+    log(t('noEntryOld'))
   }
   process.exit(1)
 }
 
 const env = { ...process.env, ELECTRON_RUN_AS_NODE: '1', ...entryEnv(target) }
 
-debug(`形态      = ${target.kind}`)
-debug(`根目录    = ${target.root}`)
-debug(`electron  = ${target.electron}`)
-debug(`mcp.js    = ${target.entry}`)
-debug(`userData  = ${env.ARBITER_USER_DATA ?? '(交给 main.ts 猜)'}`)
+debug(t('debugKind', { value: target.kind }))
+debug(t('debugRoot', { value: target.root }))
+debug(t('debugElectron', { value: target.electron }))
+debug(t('debugEntry', { value: target.entry }))
+debug(t('debugUserData', { value: env.ARBITER_USER_DATA ?? t('debugUserDataGuess') }))
 
 const child = spawn(target.electron, [target.entry], {
   stdio: 'inherit',
@@ -99,15 +100,15 @@ const child = spawn(target.electron, [target.entry], {
 })
 
 child.on('error', (error) => {
-  log(`拉起 MCP server 失败：${error.message}`)
-  log(`  命令：${target.electron} ${target.entry}`)
+  log(t('spawnFailed', { message: error.message }))
+  log(t('spawnFailedCmd', { cmd: `${target.electron} ${target.entry}` }))
   process.exit(1)
 })
 
 child.on('exit', (code, signal) => {
   // 客户端断开时 stdin 关闭，server 自己会走收尾流程后正常退出——那是 0，不是错误。
   if (signal) {
-    debug(`子进程被信号 ${signal} 终止`)
+    debug(t('debugExitSignal', { signal }))
     process.exit(1)
   }
   process.exit(code ?? 0)

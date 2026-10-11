@@ -112,7 +112,7 @@ jobs:
             dist/*.blockmap
             dist/SHA256SUMS.txt
           body: |
-            ## Arbiter 0.3.3
+            ## Arbiter 0.3.7
 
             A file converter for Windows that keeps everything on your machine. Six
             families in one app: video, audio, image, document, ebook and archive. Drop
@@ -124,28 +124,50 @@ jobs:
             压缩包。`.mkv` 和 `.docx` 一起拖进去也行——它自己判断每个能变成什么、该送到哪个
             引擎。全程在本机完成，不上传；另外带一个 MCP server，agent 可以直接调用。
 
-            ### What is new in 0.3.3 · 这一版新增
+            ### What is new in 0.3.7 · 这一版新增
 
-            Nothing here changes what an existing conversion produces.
+            - **Fixed: switching the language only translated part of the window.** 0.3.6 could leave
+              the workbench in Chinese after you picked English, and it never caught up. The cause was
+              an ordering one — the shell remounted before the language it reads was updated, so the
+              remount rendered the old one, and only subtrees that happened to re-render later flipped.
+              Worth knowing: **every i18n check this project has was green while it was broken**,
+              because they all test the dictionary, and the dictionary was right.
+              The wrong thing was *when* it was read. Fixed and verified against a real build.
 
-            这一版不改变任何既有转换的结果。
+              **修复：切换语言只翻了一半。** 0.3.6 选英文之后，工作台会留在中文且不会自己好。
+              根因是次序——外壳重挂发生在「它读的那份语言」被更新之前，于是重挂出来的是旧语言，
+              只有恰好又重渲过的子树才翻得过来。值得一提的是：**这件事坏着的时候，本项目的每一道
+              i18n 检查都是绿的**——它们测的都是字典，而字典是对的，错的是**读它的时机**。
 
-            - **Global shortcuts.** `Ctrl+O` opens files, `Enter` starts the queue,
-              `Esc` cancels whatever is running. `Enter` is ignored while an input
-              method is composing, so picking a Pinyin candidate does not start a batch.
+            - **The whole interface speaks English now.** Settings → 界面语言 switches between
+              Chinese and English, and it takes effect immediately — running task cards flip with it.
+              The MCP tools, the CLI and the Claude Code plugin follow the same setting, so an agent
+              sees the same language you do.
 
-              **全局快捷键。** `Ctrl+O` 收入文件、`Enter` 开始调律、`Esc` 取消正在跑的。
-              输入法组字时 Enter 不接管——用拼音选词的那一下不会把整批任务启动起来。
-            - **`--recipe` for the command line.** A small JSON file holding the options
-              you keep reusing, such as `{"target": "mp4", "mode": "remux"}`. Keys that
-              are not recognized are reported instead of being silently ignored.
+              **整个界面现在说英文了。** 设置 → 界面语言可以在中英之间切换，**立即生效**——
+              连正在跑的任务卡片也一起翻。MCP 工具、命令行与 Claude Code 插件跟的是同一个设置，
+              agent 看到的就是你看到的那门语言。
 
-              **命令行配方文件。** 把常用的那套选项存成一份 JSON。认不出的字段会报出来，
-              不会默默忽略。
-            - **Queue priority** on the MCP tools, and **opt-in thumbnails** for image
-              outputs (`ARBITER_MCP_THUMBNAILS=1`).
+              One honest gap · 一处如实记下的残留: failure reasons recorded **before** this version
+              stay Chinese, because that line was written down at the moment the conversion failed.
+              Reasons recorded from 0.3.6 onward follow the language setting.
+              **这一版之前**记下的失败原因仍是中文（那行字在失败那一刻就写死了）；
+              0.3.6 起的失败原因跟着语言走。
 
-              MCP 工具加了**队列优先级**；图片产物可以**选带一张缩略图**。
+            - **The plugin can check for updates.** `/arbiter:update` looks at both sides — the app you
+              have installed and the plugin itself — tells you which one is behind, and with
+              `--download` fetches the installer into your downloads folder.
+
+              It **never installs anything**: running the installer stays your call, and updating the
+              plugin is two commands it prints for you (restart Claude Code afterwards). It also keeps
+              "could not check" apart from "already up to date" — those are different answers and it
+              says so.
+
+              **插件现在会查更新了。** `/arbiter:update` 会把**应用与插件两边**都查一遍、告诉你
+              哪个旧了；加 `--download` 会把安装包下到下载目录。
+
+              **它不装任何东西**——装不装由你决定，插件更新那两条命令它打给你，跑完要重启
+              Claude Code。它还刻意把「没查成」与「已经是最新」分开说，那是两个不同的答案。
 
             The full list is in
             [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md).
@@ -199,6 +221,5 @@ jobs:
 
             第一次用请看 [README](https://github.com/${{ github.repository }}#readme)，
             里面写了它能转什么、以及哪些是刻意不做的。
-        env:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

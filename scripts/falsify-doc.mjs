@@ -93,9 +93,14 @@ if (process.argv.slice(2).includes('--anchors-only')) {
 }
 
 function runTests() {
-  const out = spawnSync('npx', ['tsx', 'scripts/test-doc.ts'], {
+  // ⚠️ 同 `falsify-ui.mjs` 那份：命令必须与 `package.json` 的 `test:doc` 一致。
+  // 这一支目前**侥幸还跑得动**——`test-doc.ts` 对 `@shared/*` 只有 `import type`，
+  // 编译期就被抹掉了。但那是巧合、不是保证：同批的 `test-core.ts` 早就因为加了值导入
+  // 而必须带这个参数（见 `falsify-ui.mjs` 那段，那正是 CI 红了一周的原因）。
+  const out = spawnSync('npx', ['tsx', '--tsconfig', 'tsconfig.test.json', 'scripts/test-doc.ts'], {
     encoding: 'utf8',
-    shell: true
+    shell: true,
+    maxBuffer: 32 * 1024 * 1024
   })
   const text = out.stdout + out.stderr
   const reds = text

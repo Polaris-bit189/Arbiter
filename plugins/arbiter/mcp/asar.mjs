@@ -42,7 +42,7 @@ const MAX_INDEX_BYTES = 64 * 1024 * 1024
  *
  * 只读头部、不碰载荷：索引总是远小于载荷，`MAX_INDEX_BYTES` 只是别让一个坏头吃光内存。
  */
-function readIndex(asarPath) {
+function readHeader(asarPath) {
   let fd
   try {
     fd = openSync(asarPath, 'r')
@@ -50,14 +50,25 @@ function readIndex(asarPath) {
     if (readSync(fd, head, 0, 16, 0) !== 16) return null
     const size = head.readUInt32LE(12)
     if (!size || size > MAX_INDEX_BYTES) return null
-    const index = Buffer.alloc(size)
-    if (readSync(fd, index, 0, size, 16) !== size) return null
-    return JSON.parse(index.toString('utf8'))
+    const raw = Buffer.alloc(size)
+    if (readSync(fd, raw, 0, size, 16) !== size) return null
+    return {
+      index: JSON.parse(raw.toString('utf8')),
+      // ⚠️ 载荷起点是 `8 + 偏移 4 处那个 u32`——**不是**偏移 8 处那个。
+      // 偏移 4 处记的是第二个 pickle 的**总**长度（含它自己的 4 字节长度前缀），
+      // 偏移 8 处那个只有载荷本身。少加这 4 字节读出来的是错位的字节，
+      // 而它多半仍是个能解析的 JSON——于是错得很安静（2026-09-26 实测）。
+      dataStart: 8 + head.readUInt32LE(4)
+    }
   } catch {
     return null
   } finally {
     if (fd !== undefined) closeSync(fd)
   }
+}
+
+function readIndex(asarPath) {
+  return readHeader(asarPath)?.index ?? null
 }
 
 export function asarHasEntry(asarPath, entry) {
@@ -95,4 +106,52 @@ export function asarEntryNames(asarPath) {
   }
   walk(index, '')
   return out
+}
+
+/**
+ * 读出 asar 里**某个条目的内容**（`Buffer`）。读不到一律 `null`。
+ *
+ * ## 为什么需要它
+ *
+ * 「这台机器上装的是哪个版本」要读应用自己的 `package.json`，而打包形态下那个文件
+ * 在 `app.asar` 里面。起一次 `arbiter.cmd --version` 也能拿到（实测两条路结果一致），
+ * 但那是**起一个 Electron**——几百毫秒，还要求应用真的能跑起来。
+ * 直接读头部里的偏移是毫秒级的，而且 `check` 与 SessionStart 那条 hook 都要用它。
+ *
+ * ## 两个实测踩到的点
+ *
+ * - **`offset` 是字符串，不是数字。** asar 用它存可能超过 `2^53` 的位置，所以序列化成
+ *   字符串了。写 `typeof node.offset === 'number'` 当判据会**恒假**，表现是「读什么都读不到」
+ *   ——而那条路看起来完全正常（它只是永远返回 null）。
+ * - **`size` 是普通数字**，可以直接用。
+ *
+ * 读的是载荷里的**一小段**（`package.json` 约 1 KB），不是整个归档。
+ */
+export function asarReadEntry(asarPath, entry) {
+  const header = readHeader(asarPath)
+  if (header === null) return null
+
+  let node = header.index
+  for (const part of entry.split('/').filter(Boolean)) {
+    node = node?.files?.[part]
+    if (!node) return null
+  }
+  if (node.offset === undefined) return null
+
+  const offset = Number(node.offset)
+  const size = Number(node.size)
+  if (!Number.isSafeInteger(offset) || offset < 0) return null
+  if (!Number.isSafeInteger(size) || size < 0) return null
+
+  let fd
+  try {
+    fd = openSync(asarPath, 'r')
+    const buf = Buffer.alloc(size)
+    if (readSync(fd, buf, 0, size, header.dataStart + offset) !== size) return null
+    return buf
+  } catch {
+    return null
+  } finally {
+    if (fd !== undefined) closeSync(fd)
+  }
 }

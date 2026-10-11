@@ -1,3 +1,5 @@
+import { t, type KeysOf } from '@shared/i18n'
+import { errorText } from '@shared/i18n/errors'
 import { memo, useCallback, useEffect, useMemo, useState } from 'react'
 import { CATEGORIES } from '@shared/types'
 import type { Category, HistoryEntry, HistoryStatus } from '@shared/types'
@@ -26,17 +28,26 @@ import { useToast } from '../store/useToast'
  * 设计给的另一个状态是 `.badge.converting`，而历史里不存在「正在转换」。
  * 取消没有对应修饰类，就落回 `.badge` 的中性外观。
  */
-const STATUS_META: Record<HistoryStatus, { label: string; badge: string; icon: string }> = {
-  done: { label: '已成', badge: 'badge done', icon: 'check' },
-  error: { label: '未成', badge: 'badge error', icon: 'error' },
-  canceled: { label: '中止', badge: 'badge', icon: 'close' }
+/**
+ * ⚠️ 下面两个表里的 `label` 存的是**字典键**而不是词（与 `libs.ts` 的 `CATEGORY_LABEL`
+ * 同一个做法），取词的地方写 `t(meta.label)`。**不能**在这里写成 `label: t(…)`：
+ * 模块级常量在 import 那一刻就求值，而语言是可以在运行中途换的——那样徽章与筛选
+ * 会永远停在启动时那一门语言上。
+ */
+const STATUS_META: Record<
+  HistoryStatus,
+  { label: KeysOf<'history.status.'>; badge: string; icon: string }
+> = {
+  done: { label: 'history.status.done', badge: 'badge done', icon: 'check' },
+  error: { label: 'history.status.error', badge: 'badge error', icon: 'error' },
+  canceled: { label: 'history.status.canceled', badge: 'badge', icon: 'close' }
 }
 
 const RANGES = [
-  { key: 'all', label: '全部' },
-  { key: 'today', label: '今日' },
-  { key: 'week', label: '近七日' },
-  { key: 'month', label: '近一月' }
+  { key: 'all', label: 'history.range.all' },
+  { key: 'today', label: 'history.range.today' },
+  { key: 'week', label: 'history.range.week' },
+  { key: 'month', label: 'history.range.month' }
 ] as const
 
 type RangeKey = (typeof RANGES)[number]['key']
@@ -54,10 +65,10 @@ const ROW_GRID = 'grid grid-cols-[minmax(0,1.6fr)_76px_74px_64px_88px_86px_auto]
 /** 相对时刻。「3 分钟前」比一个完整时间戳好扫得多，超过一周才退化成日期。 */
 function formatWhen(timestamp: number): string {
   const diff = Date.now() - timestamp
-  if (diff < 60_000) return '方才'
-  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)} 分钟前`
-  if (diff < DAY_MS) return `${Math.floor(diff / 3_600_000)} 小时前`
-  if (diff < 7 * DAY_MS) return `${Math.floor(diff / DAY_MS)} 天前`
+  if (diff < 60_000) return t('history.when.justNow')
+  if (diff < 3_600_000) return t('history.when.minutes', { n: Math.floor(diff / 60_000) })
+  if (diff < DAY_MS) return t('history.when.hours', { n: Math.floor(diff / 3_600_000) })
+  if (diff < 7 * DAY_MS) return t('history.when.days', { n: Math.floor(diff / DAY_MS) })
 
   const date = new Date(timestamp)
   const pad = (value: number): string => String(value).padStart(2, '0')
@@ -66,16 +77,18 @@ function formatWhen(timestamp: number): string {
 
 /** 耗时。`startedAt` 理论上必有（没开跑的任务根本不进历史），缺了就说「未详」而不是编一个数。 */
 function formatElapsed(entry: HistoryEntry): string {
-  if (entry.startedAt === undefined) return '未详'
+  if (entry.startedAt === undefined) return t('history.elapsed.unknown')
 
   const ms = entry.finishedAt - entry.startedAt
   if (ms < 0) return '—'
-  if (ms < 1000) return `${ms} 毫秒`
-  if (ms < 60_000) return `${(ms / 1000).toFixed(1)} 秒`
+  if (ms < 1000) return t('history.elapsed.milliseconds', { n: ms })
+  if (ms < 60_000) return t('history.elapsed.seconds', { n: (ms / 1000).toFixed(1) })
 
   const minutes = Math.floor(ms / 60_000)
   const seconds = Math.round((ms % 60_000) / 1000)
-  return seconds > 0 ? `${minutes} 分 ${seconds} 秒` : `${minutes} 分`
+  return seconds > 0
+    ? t('history.elapsed.minutesSeconds', { m: minutes, s: seconds })
+    : t('history.elapsed.minutes', { m: minutes })
 }
 
 function withinRange(timestamp: number, range: RangeKey): boolean {
@@ -131,8 +144,11 @@ const HistoryRow = memo(function HistoryRow({
           )}
           {/* 失败原因存下来就是为了这一刻：只说「未成」等于什么都没说 */}
           {entry.status === 'error' && entry.error ? (
-            <p className="mt-0.5 truncate text-[11px] text-bad" title={entry.error}>
-              {entry.error}
+            <p
+              className="mt-0.5 truncate text-[11px] text-bad"
+              title={errorText(entry.errorRef, entry.error)}
+            >
+              {errorText(entry.errorRef, entry.error)}
             </p>
           ) : null}
         </div>
@@ -140,12 +156,12 @@ const HistoryRow = memo(function HistoryRow({
 
       <span className="font-mono text-xs text-fg-muted">{formatBytes(entry.sizeBytes)}</span>
       <span className="font-mono text-xs text-fg-muted">{formatElapsed(entry)}</span>
-      <span className="text-xs text-fg-muted">{CATEGORY_LABEL[entry.category]}</span>
+      <span className="text-xs text-fg-muted">{t(CATEGORY_LABEL[entry.category])}</span>
       <span className="text-xs text-fg-faint">{formatWhen(entry.finishedAt)}</span>
 
       <span className={meta.badge}>
         <Icon name={meta.icon} size={12} />
-        {meta.label}
+        {t(meta.label)}
       </span>
 
       <div className="flex items-center justify-end gap-1">
@@ -155,7 +171,7 @@ const HistoryRow = memo(function HistoryRow({
         */}
         {entry.outputPath ? (
           <button type="button" className="btn-secondary" onClick={() => onReveal(entry)}>
-            打开位置
+            {t('history.row.reveal')}
           </button>
         ) : null}
 
@@ -165,14 +181,14 @@ const HistoryRow = memo(function HistoryRow({
           「源文件已不在原处」，由页面上的回执逐条说给用户听。
         */}
         <button type="button" className="btn-ghost" onClick={() => onRerun(entry)}>
-          再行调律
+          {t('history.row.rerun')}
         </button>
 
         <button
           type="button"
           className="btn-ghost"
-          title="抹去这一条"
-          aria-label="抹去这一条"
+          title={t('history.row.remove')}
+          aria-label={t('history.row.remove')}
           onClick={() => onRemove(entry)}
         >
           <Icon name="trash" size={14} />
@@ -250,7 +266,7 @@ export function HistoryPage(): React.JSX.Element {
   const handleReveal = useCallback(
     (entry: HistoryEntry) => {
       void reveal(entry.id).then((result) => {
-        if (result === 'missing') showToast('原处已无此物')
+        if (result === 'missing') showToast(t('history.toast.missing'))
       })
     },
     [reveal, showToast]
@@ -283,8 +299,9 @@ export function HistoryPage(): React.JSX.Element {
           void useSettings.getState().init()
         }
 
-        if (result.added > 0) showToast(`已收入 ${result.added} 个，归于队列`)
-        else if (result.rejected.length > 0) showToast(`${result.rejected.length} 条没能收入队列`)
+        if (result.added > 0) showToast(t('history.toast.added', { n: result.added }))
+        else if (result.rejected.length > 0)
+          showToast(t('history.toast.rejected', { n: result.rejected.length }))
       })
     },
     [rerun, showToast]
@@ -306,7 +323,7 @@ export function HistoryPage(): React.JSX.Element {
       return
     }
     setArmingClear(false)
-    void clear().then((removed) => showToast(`已抹去 ${removed} 条痕迹`))
+    void clear().then((removed) => showToast(t('history.toast.cleared', { n: removed })))
   }, [armingClear, clear, showToast])
 
   return (
@@ -314,10 +331,12 @@ export function HistoryPage(): React.JSX.Element {
       <header className="shrink-0 px-6 pt-5">
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0">
-            <h1 className="grad-gold-text font-display text-xl tracking-wide">历史记录</h1>
+            <h1 className="grad-gold-text font-display text-xl tracking-wide">
+              {t('history.title')}
+            </h1>
             <p className="mt-1 text-xs text-fg-faint">
-              万般格式，各归其所
-              {entries.length > 0 ? ` · 共 ${entries.length} 条痕迹` : ''}
+              {t('history.subtitle')}
+              {entries.length > 0 ? t('history.subtitleCount', { n: entries.length }) : ''}
             </p>
           </div>
 
@@ -331,12 +350,14 @@ export function HistoryPage(): React.JSX.Element {
               disabled={failedIds.length === 0}
               title={
                 failedIds.length === 0
-                  ? '当前筛选里没有失败的条目'
-                  : `重跑当前筛选里失败的 ${failedIds.length} 条`
+                  ? t('history.rerunFailed.none')
+                  : t('history.rerunFailed.title', { n: failedIds.length })
               }
               onClick={() => runRerun(failedIds)}
             >
-              重跑失败（{failedIds.length}）
+              {t('history.rerunFailed.labelLead')}
+              {failedIds.length}
+              {t('history.rerunFailed.labelTail')}
             </button>
 
             <button
@@ -346,7 +367,7 @@ export function HistoryPage(): React.JSX.Element {
               onClick={handleClear}
             >
               <Icon name="trash" size={14} />
-              {armingClear ? '再点一次以抹去全部' : '抹去痕迹'}
+              {armingClear ? t('history.clear.arming') : t('history.clear.label')}
             </button>
           </div>
         </div>
@@ -368,14 +389,14 @@ export function HistoryPage(): React.JSX.Element {
         <div className="flex flex-wrap items-center gap-3 pb-3">
           <div className="flex flex-wrap items-center gap-1.5">
             <FilterChip
-              label="全部类别"
+              label={t('history.filter.allCategories')}
               active={category === 'all'}
               onClick={() => setCategory('all')}
             />
             {CATEGORIES.map((key) => (
               <FilterChip
                 key={key}
-                label={CATEGORY_LABEL[key]}
+                label={t(CATEGORY_LABEL[key])}
                 active={category === key}
                 onClick={() => setCategory(key)}
               />
@@ -388,7 +409,7 @@ export function HistoryPage(): React.JSX.Element {
             {RANGES.map((item) => (
               <FilterChip
                 key={item.key}
-                label={item.label}
+                label={t(item.label)}
                 active={range === item.key}
                 onClick={() => setRange(item.key)}
               />
@@ -402,7 +423,8 @@ export function HistoryPage(): React.JSX.Element {
       {conflict !== null && (
         <div className="mx-6 mt-3 shrink-0 rounded-card border border-gold-dim bg-raised px-3 py-2.5">
           <p className="text-xs text-gold-pale">
-            这 {conflict.items.length} 条的目标位置已经有同名产物了——要怎么处理？
+            {t('history.conflict.titleLead')} {conflict.items.length}{' '}
+            {t('history.conflict.titleTail')}
           </p>
           <ul className="scroll-dark mt-1.5 max-h-24 space-y-0.5 overflow-y-auto">
             {conflict.items.map((item) => (
@@ -416,7 +438,7 @@ export function HistoryPage(): React.JSX.Element {
             ))}
           </ul>
           <p className="mt-1.5 text-[11px] leading-relaxed text-fg-faint">
-            目前一条都还没有入队。选「另存一份」会保留已有产物，新产物另起名字。
+            {t('history.conflict.hint')}
           </p>
           <div className="mt-2 flex items-center gap-2">
             {/* **默认那一档摆在前面**，而且写全「另存一份」而不是「确定」——
@@ -426,17 +448,17 @@ export function HistoryPage(): React.JSX.Element {
               className="btn-primary"
               onClick={() => runRerun(conflict.ids, 'rename')}
             >
-              另存一份（推荐）
+              {t('history.conflict.rename')}
             </button>
             <button
               type="button"
               className="btn-secondary"
               onClick={() => runRerun(conflict.ids, 'overwrite')}
             >
-              覆盖原产物
+              {t('history.conflict.overwrite')}
             </button>
             <button type="button" className="btn-ghost" onClick={() => setConflict(null)}>
-              先不重跑
+              {t('history.conflict.cancel')}
             </button>
           </div>
         </div>
@@ -451,13 +473,15 @@ export function HistoryPage(): React.JSX.Element {
               className={report.rejected.length > 0 ? 'shrink-0 text-bad' : 'shrink-0 text-gold'}
             />
             <span className="flex-1 text-xs text-gold-pale">
-              重跑：收入 {report.added} 个
-              {report.rejected.length > 0 ? `，${report.rejected.length} 个没能收入` : ''}
+              {t('history.report.summaryLead')} {report.added} {t('history.report.summaryTail')}
+              {report.rejected.length > 0
+                ? t('history.report.rejected', { n: report.rejected.length })
+                : ''}
             </span>
             <button
               type="button"
               onClick={() => setReport(null)}
-              aria-label="收起"
+              aria-label={t('history.report.collapse')}
               className="rounded p-0.5 text-fg-faint transition-colors hover:bg-hover hover:text-fg"
             >
               <Icon name="close" size={13} />
@@ -469,8 +493,7 @@ export function HistoryPage(): React.JSX.Element {
             //（没有「只对这一条生效」的旋钮）。改了就**必须说出来**：
             // 静默改设置的后果是用户下次拖一批文件进来，行为莫名其妙地变了。
             <p className="mt-1.5 text-[11px] leading-relaxed text-amber-400">
-              同时把你的「同名文件」设置改成了刚选的那一档——之后的转换都会照此执行，
-              可在格式设置里改回。
+              {t('history.report.policyChanged')}
             </p>
           )}
 
@@ -491,9 +514,13 @@ export function HistoryPage(): React.JSX.Element {
 
       <div className="scroll-dark min-h-0 flex-1 overflow-y-auto px-6">
         {entries.length === 0 ? (
-          <EmptyState seal title="尚无文件留下痕迹" hint="调律过的文件都会在此留名" />
+          <EmptyState
+            seal
+            title={t('history.empty.noEntries')}
+            hint={t('history.empty.noEntriesHint')}
+          />
         ) : filtered.length === 0 ? (
-          <EmptyState title="此地无符合条件的痕迹" hint="换个筛选再来看看" />
+          <EmptyState title={t('history.empty.noMatch')} hint={t('history.empty.noMatchHint')} />
         ) : (
           <>
             <div
@@ -502,13 +529,13 @@ export function HistoryPage(): React.JSX.Element {
                 'sticky top-0 z-10 border-b border-line-2 bg-canvas px-2 py-2 text-[11px] text-fg-faint'
               )}
             >
-              <span>文件</span>
-              <span>体积</span>
-              <span>耗时</span>
-              <span>类别</span>
-              <span>时刻</span>
-              <span>结局</span>
-              <span className="text-right">操作</span>
+              <span>{t('history.column.file')}</span>
+              <span>{t('history.column.size')}</span>
+              <span>{t('history.column.elapsed')}</span>
+              <span>{t('history.column.category')}</span>
+              <span>{t('history.column.time')}</span>
+              <span>{t('history.column.status')}</span>
+              <span className="text-right">{t('history.column.actions')}</span>
             </div>
 
             {filtered.map((entry) => (

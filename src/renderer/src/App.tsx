@@ -1,4 +1,5 @@
 import { useEffect } from 'react'
+import { setLocale, t } from '@shared/i18n'
 import { Sprite } from './components/Sprite'
 import { Toast } from './components/Toast'
 import { TitleBar } from './components/TitleBar'
@@ -7,6 +8,7 @@ import { WorkbenchPage } from './pages/WorkbenchPage'
 import { HistoryPage } from './pages/HistoryPage'
 import { SettingsPage } from './pages/SettingsPage'
 import { AboutPage } from './pages/AboutPage'
+import { htmlLangOf, localeOf } from './lib/locale'
 import { useNav } from './store/useNav'
 import { useTasks } from './store/useTasks'
 import { useHistory } from './store/useHistory'
@@ -19,9 +21,42 @@ import { useEngines } from './store/useEngines'
  *
  * 整页不滚（`main.css` 里 body 已是 `overflow: hidden`），**滚动一律发生在页面区
  * 自己的容器里**——长列表的表头要始终可见、拖拽区不该被滚走，都靠这一条。
+ *
+ * ## 语言切换靠 `key={locale}` 重挂，不重启
+ *
+ * 唯一的那个 `key` 放在**下面那个 shell 根元素**上，整个子树跟着换一次语言。
+ * 这样做的代价是工作台长列表会丢 `scrollTop`——而用户一辈子改一次语言，划算。
+ *
+ * ⚠️ **`key` 只管「重挂」，管不了「用哪门语言重挂」。** 全局那份语言由上面渲染期的
+ * `setLocale(locale)` 负责，**不能挪进 effect**——effect 在 commit 之后才跑，而重挂
+ * 就发生在 commit 那一刻，挪进去的结果是「换了语言的那一次重挂，整棵树用的是旧语言」。
+ * 0.3.6 实测过：那样子选英文，侧栏与页脚会翻、**工作台整页不翻**，而且不退。
+ *
+ * 为什么不改 URL query：`loadFile` 与 dev 的 `ELECTRON_RENDERER_URL` 是两条 bootstrap
+ * 路径，语言写进 URL 之后，切完语言 F5 整页刷新会**悄悄退回旧语言**。
  */
 function App(): React.JSX.Element {
   const page = useNav((s) => s.page)
+  const settings = useSettings((s) => s.settings)
+  const locale = localeOf(settings)
+
+  /*
+   * ⚠️ **必须在渲染期就把语言推给那份全局，不能只放在下面那个 effect 里。**
+   *
+   * `useEffect` 跑在 commit **之后**，而 `key={locale}` 的重挂发生在 commit **之时**——
+   * 于是「换语言」的那一次渲染，子树读到的仍是**旧**的全局，重挂出来的整棵树是旧语言。
+   * 之后谁自己重渲谁才翻得过来：`Sidebar` 订阅了 `useTasks`，任务列表一到它就对了；
+   * **而没有任何东西触发它重渲的那些子树，就一直卡在旧语言上。**
+   *
+   * 这不是推理出来的隐患，是 0.3.6 实测到的：装出来把「界面语言」选成英文，
+   * 侧栏 / 标题栏 / 页脚是英文，**工作台整页仍是中文**，而且稳定复现不退。
+   * 文件头那句「把 key 放在这里之后『切了英文还有一半是中文』结构上不可能」——
+   * 是**假的**，漏的那一半根本不需要渲染到 key 之外，它只需要「不再重渲一次」。
+   *
+   * `setLocale` 只是一句 `current = next`（见 `@shared/i18n`），幂等且零成本，
+   * 渲染期调用没有问题——StrictMode 的二次渲染同样安全。
+   */
+  setLocale(locale)
 
   useEffect(() => {
     // 这两句**必须留在这一层**，不能下移到页面组件里。
@@ -50,36 +85,63 @@ function App(): React.JSX.Element {
     return off
   }, [])
 
+  /**
+   * 同步两个「界面之外」的标签。
+   *
+   * ⚠️ `setLocale` **已经提到上面渲染期**了（理由见那段注释）：它读的是 `@shared/i18n`
+   * 那份全局，而 `describeOptions` / `describeTrim` 这些 shared 里的纯函数在主进程与
+   * 渲染层**共用同一份实现**，读的也是那份全局——少了它，界面上的参数摘要会一直是中文，
+   * 而它是用户核对「这条任务按什么参数跑的」的唯一依据。
+   *
+   * 留在这里的是**碰 DOM** 的两件事，它们只能在 commit 之后做。
+   */
+  useEffect(() => {
+    document.documentElement.lang = htmlLangOf(locale)
+    document.title = t('app.title')
+  }, [locale])
+
   return (
-    <div className="flex h-screen flex-col overflow-hidden bg-canvas text-fg">
+    // ⚠️ `key={locale}` 是整条 i18n 的**重挂开关**，全仓只此一处。见文件头那段说明。
+    <div key={locale} className="flex h-screen flex-col overflow-hidden bg-canvas text-fg">
       {/* 素材 sprite 全文档只挂一次：logo.svg 里的 <linearGradient id="gGold"> 只能有一份 */}
       <Sprite />
 
-      <TitleBar />
-      <div className="hairline" />
+      {/*
+        ⚠️ **设置到手之前只渲染空壳。**
+        少了这道门控，首帧会用「没设过语言」算出一种语言、设置到手之后立刻翻成另一种，
+        用户看到的是界面闪一下——而 `settings.language` 恰恰是唯一一个「值不同则整棵树
+        都不同」的设置项。窗口底色由 `window.ts` 的 `backgroundColor` 顶着，所以空壳
+        不是一片白。
+      */}
+      {settings !== null && (
+        <>
+          <TitleBar />
+          <div className="hairline" />
 
-      <div className="flex min-h-0 flex-1">
-        <Sidebar />
+          <div className="flex min-h-0 flex-1">
+            <Sidebar />
 
-        <main className="flex min-h-0 min-w-0 flex-1 flex-col">
-          {/*
-            工作台用 hidden 保活而不是卸载：长列表的 scrollTop 一旦卸载就没了，
-            切去「关于」再切回来会发现队列跳回顶部。
-            另外三页反过来——条件渲染、用完整卸载换一份干净的表单状态。
-          */}
-          <div className={page === 'work' ? 'flex min-h-0 flex-1 flex-col' : 'hidden'}>
-            <WorkbenchPage />
+            <main className="flex min-h-0 min-w-0 flex-1 flex-col">
+              {/*
+                工作台用 hidden 保活而不是卸载：长列表的 scrollTop 一旦卸载就没了，
+                切去「关于」再切回来会发现队列跳回顶部。
+                另外三页反过来——条件渲染、用完整卸载换一份干净的表单状态。
+              */}
+              <div className={page === 'work' ? 'flex min-h-0 flex-1 flex-col' : 'hidden'}>
+                <WorkbenchPage />
+              </div>
+
+              {page !== 'work' && (
+                <div className="scroll-dark min-h-0 flex-1 overflow-y-auto">
+                  {page === 'history' && <HistoryPage />}
+                  {page === 'settings' && <SettingsPage />}
+                  {page === 'about' && <AboutPage />}
+                </div>
+              )}
+            </main>
           </div>
-
-          {page !== 'work' && (
-            <div className="scroll-dark min-h-0 flex-1 overflow-y-auto">
-              {page === 'history' && <HistoryPage />}
-              {page === 'settings' && <SettingsPage />}
-              {page === 'about' && <AboutPage />}
-            </div>
-          )}
-        </main>
-      </div>
+        </>
+      )}
 
       {/*
         Toast 宿主只挂这一处，**四个页面都不要各自挂一个**。

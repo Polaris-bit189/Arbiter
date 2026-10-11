@@ -1,5 +1,5 @@
 import { cpus } from 'os'
-import type { EngineKey } from '@shared/types'
+import type { EngineKey, EncodePreset, TaskOptions } from '@shared/types'
 
 /**
  * 按引擎分桶的并发调度器。
@@ -99,7 +99,17 @@ const ENGINE_CAPACITY: Record<EngineKey, number> = {
   /** 单进程单 profile：第二个实例会静默把参数转交给第一个，退出码 0 却不产生产物 */
   libreoffice: 1,
   calibre: 1,
-  archive: 2
+  archive: 2,
+  /**
+   * 开加密容器。解密那一步是纯内存里的 XOR（实测 64 MB 约 100 ms），真正的开销在
+   * 「解完之后要转码」那一步——而那一步会**自己再起一个 ffmpeg 子进程**。
+   *
+   * ⚠️ **那笔开销不占 ffmpeg 的桶**，这是这本账目前的一处近似：队列按 `engine` 分桶，
+   * 而这条任务在矩阵里的引擎是 `encmusic`。之所以现在可以接受：音频转码比视频轻得多
+   * （内存与时长都不是一个量级），而且这里的上限只有 2。谁要是接了「容器里能装视频」
+   * 的那类格式，得回来把这条重算一遍。
+   */
+  encmusic: 2
 }
 
 /** 引擎的并发容量（份数）。准入判据见 `pump()` */
@@ -113,10 +123,84 @@ export function engineLimit(engine: EngineKey): number {
  * `inputBytes` 为 `undefined` 表示量不到体积（理论上不该发生）——**按重的算**：
  * 在一个来历不明的文件上放大并发，赌的是一台机器的内存。
  */
-export function taskCost(engine: EngineKey, inputBytes: number | undefined): number {
+/**
+ * 慢预设比 `veryfast` 多吃多少内存。
+ *
+ * ## 为什么这张表存在
+ *
+ * 它补的正是 `FAST_LANE_MAX_BYTES` 那段注释自己承认的那个洞：「真正决定内存的是
+ * 分辨率，而分辨率在入队期拿不到，体积只是个代理」。**编码预设是第二个决定内存的量，
+ * 而它在入队期就在 `task.options` 里**——白拿，没有任何理由不记。
+ *
+ * ## 数据（本机实测，2026-09-17）
+ *
+ * 口径：同一份 1080p30 真实照片推镜素材、`-crf 23`、单个进程采样
+ * `PeakWorkingSet64`（20 ms 一次），取全程峰值。
+ *
+ * | preset    | 峰值 RSS   | 对 veryfast |
+ * | --------- | ---------- | ----------- |
+ * | ultrafast | 887 MiB    | 0.57        |
+ * | superfast | 1373 MiB   | 0.89        |
+ * | veryfast  | 1544 MiB   | 1.00        |
+ * | faster    | 1652 MiB   | 1.07        |
+ * | fast      | 1759 MiB   | 1.14        |
+ * | medium    | 2007 MiB   | 1.30        |
+ * | slow      | 2125 MiB   | 1.38        |
+ * | slower    | 2222 MiB   | 1.44        |
+ * | veryslow  | 2525 MiB   | 1.64        |
+ * | placebo   | 3556 MiB   | **2.30**    |
+ *
+ * 曲线是干净的单调，所以这张表不是拍的。取值按「实测比值四舍五入到 0.5」定，
+ * **下界夹在 1**：比 `veryfast` 更省内存的档位不该让这本账放宽——
+ * 那等于拿「用户选了个更省内存的档」去赌另一条任务的分辨率，方向是错的。
+ *
+ * ⚠️ **这一条与本文件其它常量的口径有一个重要差别**：那些数是「相对比值」（它描述的是
+ * 引擎**内部**的取舍），而张表只影响并发账。所以它不需要和别的常量凑同一台机器、
+ * 同一份素材——**只有比值有意义**，绝对值换个素材就变（同一份数据换 640x640 素材，
+ * veryfast 是 118 ms / 213 KB，那张表里一样用）。
+ */
+const PRESET_MEMORY_FACTOR: Record<EncodePreset, number> = {
+  ultrafast: 1,
+  superfast: 1,
+  veryfast: 1,
+  faster: 1,
+  fast: 1,
+  medium: 1.5,
+  slow: 1.5,
+  slower: 1.5,
+  veryslow: 1.5,
+  placebo: 2.5
+}
+
+/**
+ * 一条任务占几份并发。只有 ffmpeg 分档，其余引擎一律 1 份。
+ *
+ * 两个输入，先后判：
+ *
+ * 1. **输入体积**判轻重（`FAST_LANE_MAX_BYTES`），理由见那里；
+ * 2. **编码预设**再乘一个倍率（`PRESET_MEMORY_FACTOR`）——它比体积那个代理准得多，
+ *    因为它真的是「这条任务要吃掉多少编码器内存」的直接原因。
+ *
+ * `inputBytes` 为 `undefined` 表示量不到体积（理论上不该发生）——**按重的算**：
+ * 在一个来历不明的文件上放大并发，赌的是一台机器的内存。
+ *
+ * `options` **必须显式传**（可以是 `undefined`，表示这条任务没有参数）。做成必填
+ * 而不是可选，是为了让「忘了传」变成编译错误：省掉一个参数就少乘一次倍率，
+ * 而那个错误**不会有任何症状**——队列只是悄悄地多放进去几条重编码。
+ * MCP 那条路（`src/mcp/jobs.ts`）今天没有质量档，它显式传 `undefined`。
+ */
+export function taskCost(
+  engine: EngineKey,
+  inputBytes: number | undefined,
+  options: TaskOptions | undefined
+): number {
   if (engine !== 'ffmpeg') return 1
-  if (inputBytes === undefined || inputBytes > FAST_LANE_MAX_BYTES) return HEAVY_COST
-  return 1
+  const base = inputBytes === undefined || inputBytes > FAST_LANE_MAX_BYTES ? HEAVY_COST : 1
+  const preset = options?.quality?.preset
+  if (preset === undefined) return base
+  // 向上取整：代价是**份数**，小数份在 `costOf` 那一层会被夹成整数，两个方向都难看。
+  // 取整方向选「多占」——宁可少赚一点吞吐，也不要在内存上赌。
+  return Math.ceil(base * PRESET_MEMORY_FACTOR[preset])
 }
 
 interface Entry {

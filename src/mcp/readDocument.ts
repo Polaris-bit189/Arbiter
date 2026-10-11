@@ -2,6 +2,7 @@ import { readFile, mkdtemp, rm } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { extOf } from '@shared/formats'
+import { t } from '@shared/i18n'
 import { convert, ConversionCanceled, ConversionFailed } from '../main/converters'
 import { CancelToken } from '../main/core/cancel'
 import { McpToolError } from './errors'
@@ -96,7 +97,7 @@ async function readPdfText(input: string, toExt: string, cancel: CancelToken): P
       textless.join('\n'),
       {
         source_format: 'pdf',
-        hint: '本项目不含 OCR。要看内容就用 convert_file 转成 png / jpg 交给能看图的客户端；要文字得先让用户做一次 OCR。'
+        hint: t('mcp.read.textlessHint')
       },
       { code: 'no_text_content' }
     )
@@ -181,17 +182,13 @@ export async function readDocument(input: {
   } catch (error) {
     if (error instanceof McpToolError) throw error
     if (cancel.canceled || error instanceof ConversionCanceled) {
-      throw new McpToolError(
-        '读取被取消，没有拿到正文。',
-        { source: input.path },
-        { code: 'canceled' }
-      )
+      throw new McpToolError(t('mcp.read.canceled'), { source: input.path }, { code: 'canceled' })
     }
     if (error instanceof ConversionFailed) {
       // 引擎的原始报错**一个字都不留地转出去**：它是唯一说得清「哪一步不对」的东西。
       // 码给 `source_corrupt`（引擎没能完成、重试不会有不同结果），分类只由那一处决定。
       throw new McpToolError(
-        `读不出正文：${error.logTail.join('\n')}`,
+        t('mcp.read.failed', { log: error.logTail.join('\n') }),
         { log_tail: error.logTail },
         { code: 'source_corrupt' }
       )
@@ -200,17 +197,12 @@ export async function readDocument(input: {
   }
 
   if (full.trim() === '') {
-    warnings.push(
-      '抽出来是空的。两种可能：「这份文档确实没有文字」，或者「文字都在图里」' +
-        '（本项目不含 OCR，后者抽不出来）。'
-    )
+    warnings.push(t('mcp.read.empty'))
   }
 
   const total = full.length
   if (input.offset > 0 && input.offset >= total && total > 0) {
-    warnings.push(
-      `offset=${input.offset} 已经超出正文长度（${total} 字符），这一段是空的：读完了就不要再往下读`
-    )
+    warnings.push(t('mcp.read.offsetBeyond', { offset: input.offset, total }))
   }
 
   // 上限是第三道闸：默认值只管「不传」，管不住「传个 5000000 进来」。
@@ -218,10 +210,7 @@ export async function readDocument(input: {
   // 比让它收一条参数校验错误强（与 `list_jobs` 夹 `limit` 同一个取舍）。
   const maxChars = Math.min(input.maxChars, MAX_READ_CHARS)
   if (maxChars < input.maxChars) {
-    warnings.push(
-      `max_chars 被夹到 ${MAX_READ_CHARS}（你要的是 ${input.maxChars}）：单次返回再多会把上下文塞爆，` +
-        '要更多就用 offset 分几次读'
-    )
+    warnings.push(t('mcp.read.maxCharsClamped', { max: MAX_READ_CHARS, wanted: input.maxChars }))
   }
 
   const text = full.slice(input.offset, input.offset + maxChars)

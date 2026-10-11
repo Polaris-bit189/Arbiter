@@ -61,6 +61,7 @@ function applyPatch(task: Task, patch: TaskPatch): Task {
   if (patch.status !== undefined) next.status = patch.status
   if (patch.progress !== undefined) next.progress = patch.progress
   if (patch.error !== undefined) next.error = patch.error ?? undefined
+  if (patch.errorRef !== undefined) next.errorRef = patch.errorRef ?? undefined
   if (patch.logTail !== undefined) next.logTail = patch.logTail ?? undefined
   if (patch.outputPath !== undefined) next.outputPath = patch.outputPath ?? undefined
   if (patch.sizeBytes !== undefined) next.sizeBytes = patch.sizeBytes ?? undefined

@@ -6,7 +6,11 @@ import { appPathsFromElectron, setAppPaths } from '../src/main/core/appPaths'
  *
  * `core/appPaths.ts` 刻意不 import electron、也不做「找不到就 require('electron') 兜底」
  * （理由写在它的文件头），所以凡是会走到设置 / 历史 / 引擎路径解析的测试脚本都得先装一次。
- * 需要它的四个：`test-tasks` / `test-pandoc` / `test-pdf` / `bench`。
+ * 需要它的脚本都在第一行 import 它。**这里刻意不列名单**——列过一次就会漂：这段注释
+ * 原本写的是「四个」，而实际已经有十个（`test-tasks` / `test-integration` / `test-encmusic` /
+ * `test-engine-install` / `test-mcp-inspect` / `test-electron-free` / `test-pandoc` /
+ * `test-pdf` / `bench` / `electron-import-probe`）。要知道有哪些，
+ * `grep -rl install-test-paths scripts/` 是唯一的真相源。
  *
  * 用法是各脚本的**第一行** import：
  *

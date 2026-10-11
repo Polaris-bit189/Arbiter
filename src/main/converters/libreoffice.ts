@@ -3,6 +3,7 @@ import { copyFile, mkdtemp, readdir, rm, stat } from 'fs/promises'
 import { tmpdir } from 'os'
 import { basename, dirname, join, resolve } from 'path'
 import { extOf } from '@shared/formats'
+import { stagePair } from '@shared/i18n/stage'
 import { libreOfficePath } from '../engines/heavy'
 import { killTree } from '../core/kill'
 import type { CancelToken } from '../core/cancel'
@@ -370,7 +371,7 @@ export async function runLibreOffice(context: ConvertContext): Promise<void> {
     await removeQuietly(tempOut)
     await removeQuietly(copyPath)
 
-    onProgress({ kind: 'indeterminate', stage: '启动 LibreOffice…' })
+    onProgress({ kind: 'indeterminate', ...stagePair({ key: 'stage.libreoffice.start' }) })
 
     // 一律传绝对路径（约束 2）：文件名里的空格、引号、`&`、`$()`、中文、emoji 都天然无害
     // （全程数组参数、不经 shell），以 `-` 开头的文件名被 `resolve` 一改也就不再像选项了。
@@ -390,7 +391,7 @@ export async function runLibreOffice(context: ConvertContext): Promise<void> {
       ],
       cancel,
       exe,
-      () => onProgress({ kind: 'indeterminate', stage: '转换中…' })
+      () => onProgress({ kind: 'indeterminate', ...stagePair({ key: 'stage.converting' }) })
     )
 
     await ensureProduced(tempOut, outputDir, toExt)

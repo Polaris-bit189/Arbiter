@@ -137,7 +137,7 @@ const MUTATIONS = [
       '    cb?: (error?: Error | null) => void',
       '  ): boolean => {',
       "    const text = typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8')",
-      '    log(`[arbiter] 拦下一段本会污染 stdout 的写入（stdout 是数据通道）：${text.trimEnd()}`)',
+      "    log(t('cli.stdout.blocked', { text: text.trimEnd() }))",
       '    // 拦下之后本没有真实写入发生，但调用方可能在等这个回调（流式写入就是这样）。',
       '    // 不回它就永远悬着。',
       "    const callback = typeof encodingOrCb === 'function' ? encodingOrCb : cb",
@@ -235,8 +235,8 @@ const MUTATIONS = [
       '    stat = statSync(source)',
       '  } catch {',
       '    throw new McpToolError(',
-      '      `找不到源文件：${source}`,',
-      "      { source, hint: '路径要写全（相对路径按当前工作目录解析），且文件必须已经存在' },",
+      "      t('cli.source.notFound', { source }),",
+      "      { source, hint: t('cli.source.notFoundHint') },",
       "      { code: 'source_missing' }",
       '    )',
       '  }'
@@ -274,9 +274,11 @@ const MUTATIONS = [
     // 它必然以盘符或 `/` 开头，引擎不会把它当成选项。见约束 2。）
     name: '未知的 --选项 静默当成文件名（不再报 error）',
     file: CORE_CLI,
+    // ⚠️ P4（i18n）把这一行的**文案**换成了 `t('integration.cli.unknownOption', …)`，
+    //    锚点跟着文案走：变异的判据（认不出 `--xxx` 时报不报错）一个字没变。
     from: [
       "    if (arg.startsWith('--')) {",
-      "      return { kind: 'error', message: `未知的选项：${arg}`, json }",
+      "      return { kind: 'error', message: t('integration.cli.unknownOption', { name: arg }), json }",
       '    }'
     ].join('\n'),
     to: [
@@ -314,7 +316,8 @@ const MUTATIONS = [
       '  if (out !== null && paths.length > 1) {',
       '    return {',
       "      kind: 'error',",
-      '      message: `--out 只能配一个源文件，这次给了 ${paths.length} 个`,',
+      // P4（i18n）：文案改走字典，锚点跟着换；`kind: 'error'` 那两行没动
+      "      message: t('integration.cli.outSingleSource', { count: paths.length }),",
       '      json',
       '    }',
       '  }'
@@ -333,12 +336,8 @@ const MUTATIONS = [
   {
     name: 'pass() 改成 exit(2)（放行变成阻断——PreToolUse 上 2 是拦截）',
     file: HOOK,
-    from: ['  if (reason) log(`${reason} —— 放行（不改写这次 Read）`)', '  process.exit(0)'].join(
-      '\n'
-    ),
-    to: ['  if (reason) log(`${reason} —— 放行（不改写这次 Read）`)', '  process.exit(2)'].join(
-      '\n'
-    ),
+    from: ["  if (reason) log(t('passSuffix', { reason }))", '  process.exit(0)'].join('\n'),
+    to: ["  if (reason) log(t('passSuffix', { reason }))", '  process.exit(2)'].join('\n'),
     expect: [
       '工具不是 Read → 0 且 stdout 为空',
       '扩展名不在快转表里 → 0 且 stdout 为空',
@@ -355,7 +354,7 @@ const MUTATIONS = [
     // （它考的是另一条分支）。把它写进 expect 会换来一条永远失败的假红。
     name: 'JSON.parse 的 catch 改成 exit(1)（坏输入变成阻断）',
     file: HOOK,
-    from: `    return pass('stdin 不是合法 JSON')`,
+    from: `    return pass(t('passBadJson'))`,
     to: `    process.exit(1)`,
     expect: ['stdin 不是合法 JSON → 0 且 stdout 为空']
   },
@@ -363,7 +362,7 @@ const MUTATIONS = [
     // ⚠️ 同理：这条只红它自己那一条。
     name: 'tool_name !== Read 的分支改成 exit(1)',
     file: HOOK,
-    from: `  if (input?.tool_name !== 'Read') return pass(\`工具不是 Read：\${input?.tool_name}\`)`,
+    from: `  if (input?.tool_name !== 'Read') return pass(t('passWrongTool', { tool: input?.tool_name }))`,
     to: `  if (input?.tool_name !== 'Read') process.exit(1)`,
     expect: ['工具不是 Read → 0 且 stdout 为空']
   },
@@ -372,7 +371,7 @@ const MUTATIONS = [
     // 内部，**普通 Node 的 `existsSync` 恒为 false**（约束 21 那个静默 bug 的修法）。
     name: '找不到应用的分支改成 exit(1)',
     file: HOOK,
-    from: `  if (!target || !target.electron) return pass('本机没有找到可用的 Arbiter')`,
+    from: `  if (!target || !target.electron) return pass(t('passNoApp'))`,
     to: `  if (!target || !target.electron) process.exit(1)`,
     expect: ['本机没有可用的 Arbiter → 0 且 stdout 为空']
   },
@@ -411,7 +410,7 @@ const MUTATIONS = [
       '  if (isRecipeEmpty(recipe)) {\n' +
       '    return {\n' +
       '      ok: false,\n' +
-      '      message: `这份配方一个字段都没认出来：${path}（只认 target 与 mode，见 --help）`\n' +
+      "      message: t('cli.recipe.empty', { path })\n" +
       '    }\n' +
       '  }\n',
     to: '\n',
@@ -423,7 +422,7 @@ const MUTATIONS = [
     // 而它的表现是「配了没反应」——不说出来就永远查不到。
     name: '认不出的字段不再报到 stderr（配了没反应且无从查起）',
     file: MAIN,
-    from: '  for (const problem of problems) log(`⚠️ 配方 ${path}：${problem}`)\n',
+    from: "  for (const problem of problems) log(t('cli.recipe.problem', { path, problem }))\n",
     to: '\n',
     expect: ['10k 但那个坏字段**一定要报到 stderr**（否则用户永远不知道自己写错了一个键名）']
   }

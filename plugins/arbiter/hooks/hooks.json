@@ -1,5 +1,5 @@
 {
-  "description": "PreToolUse(Read)：Read 一个 .docx / .xlsx / .doc / .odt / .epub 时，先用 arbiter CLI 把它转成一份临时 Markdown/CSV/文本，再把这次读取改写到那份临时产物上。⚠️ 这是**改写**，不是拦截：找不到应用、没有 CLI、引擎没装、转换失败、超时——任何一条不成立都原样放行，绝不挡住用户正常的 Read。",
+  "description": "两个 hook。① PreToolUse(Read)：Read 一个 .docx / .xlsx / .doc / .odt / .epub 时，先用 arbiter CLI 把它转成一份临时 Markdown/CSV/文本，再把这次读取改写到那份临时产物上——这是**改写**不是拦截，找不到应用、没有 CLI、引擎没装、转换失败、超时，任何一条不成立都原样放行。② SessionStart(startup)：看一眼 Arbiter 有没有新版本，有就提一句；没网、没新版、任何异常都**完全静默**（空 stdout + 退出码 0），绝不拖慢会话启动。",
   "hooks": {
     "PreToolUse": [
       {
@@ -9,6 +9,18 @@
             "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/read-convert.mjs\"",
             "timeout": 30
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "startup",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/session-start.mjs\"",
+            "timeout": 3
           }
         ]
       }

@@ -137,6 +137,28 @@ const REAL_KEY = 'HKCU\\Software\\Classes\\*\\shell\\Arbiter'
 /** 写进去再读回来、用来验编码的一个带中文的值 */
 const CJK_VALUE = '过期的 值 --convert "%1"'
 
+/**
+ * 本机控制台码页表示得了中文吗——决定下面那两条「中文往返」断言**测不测得了**。
+ *
+ * ⚠️ 这个前提在 `reg()` 的注释里**早就写明了**（「英文机器上 `reg.exe` 读回中文值时会
+ * 把不可映射的字符写成 `?`」），但断言本身没有据此让步，于是 CI 的英文 runner 上那两条
+ * 必然红——红的不是实现，是**断言的前提不成立**（模块在英文机器上仍然是对的：
+ * 纯 ASCII 经过两个解码器都一样）。
+ *
+ * 判据问系统自己（`chcp.com` 报的代码页号：936 = GBK、54936 = GB18030），
+ * **不拿被测的 `decodeRegOutput` 去探**——那会变成自己验自己：解码器一坏，探测跟着
+ * 失败，于是两条断言被静默跳过、而不是变红。取不到码页就当测不了（保守）。
+ */
+const OEM_CP = (() => {
+  const out = spawnSync('chcp.com', [], { windowsHide: true, encoding: 'utf8' })
+  const m = /(\d{3,5})/.exec(out.stdout ?? '')
+  return m ? Number(m[1]) : null
+})()
+const CN_ROUNDTRIP_OK = OEM_CP === 936 || OEM_CP === 54936
+/** 中文往返测不了时统一走这条：**说清楚跳过了什么**，别让它静默消失。 */
+const skipCjk = (what: string): void =>
+  notice(`${what}：跳过（本机 OEM 码页 ${OEM_CP ?? '取不到'}，表示不了中文）`)
+
 let passed = 0
 let failed = 0
 let skipped = 0
@@ -598,11 +620,15 @@ async function testRegistryRoundTrip(): Promise<void> {
   check('没有报错', installedState.error === null, String(installedState.error))
 
   const rawLabel = await reg(['query', contextMenuRoot(), '/ve'])
-  check(
-    '中文标签写进注册表之后读回来是原样的（证明写路径送进去的是真 UTF-16，不是 GBK 乱码）',
-    parseRegDefault(rawLabel.stdout) === '用调律者转换',
-    String(parseRegDefault(rawLabel.stdout))
-  )
+  if (CN_ROUNDTRIP_OK) {
+    check(
+      '中文标签写进注册表之后读回来是原样的（证明写路径送进去的是真 UTF-16，不是 GBK 乱码）',
+      parseRegDefault(rawLabel.stdout) === '用调律者转换',
+      String(parseRegDefault(rawLabel.stdout))
+    )
+  } else {
+    skipCjk('中文标签往返')
+  }
 
   const rawAll = await reg(['query', contextMenuRoot()])
   check(
@@ -641,11 +667,15 @@ async function testRegistryRoundTrip(): Promise<void> {
   ])
   check('前置：中文的过期值写得进去', staleWrite.code === 0, staleWrite.stderr.trim())
   const stale = await readContextMenu()
-  check(
-    '★ 中文 command 值经模块解码后一字不差（UTF-8 硬解会在这里变成乱码）',
-    stale.command === CJK_VALUE,
-    `${String(stale.command)} vs ${CJK_VALUE}`
-  )
+  if (CN_ROUNDTRIP_OK) {
+    check(
+      '★ 中文 command 值经模块解码后一字不差（UTF-8 硬解会在这里变成乱码）',
+      stale.command === CJK_VALUE,
+      `${String(stale.command)} vs ${CJK_VALUE}`
+    )
+  } else {
+    skipCjk('★ 中文 command 值解码往返')
+  }
   check(
     '前置：此时 command 与 expected 不同（否则下面「自愈会重写」那条是空转）',
     stale.installed === true && stale.command !== stale.expected,

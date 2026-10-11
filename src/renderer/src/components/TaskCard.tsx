@@ -1,3 +1,8 @@
+import { t, type KeysOf } from '@shared/i18n'
+// 阶段文案优先按**码**取词（`stageRef`），没有码才回落到那句中文快照。
+// 理由：任务可能跑几分钟，中途用户把界面切成英文（见 shared/i18n/stage.ts 的文件头）。
+import { errorText } from '@shared/i18n/errors'
+import { stageText } from '@shared/i18n/stage'
 import { memo, useState } from 'react'
 import { targetsFor } from '@shared/formats'
 import type { AfterConvertAction, TaskStatus } from '@shared/types'
@@ -29,14 +34,20 @@ export const QUEUE_COLUMNS = 'minmax(220px, 1.6fr) 84px 150px 1fr 110px'
  * `mark` 用字符而不是图标：`◆` 在字体里就是一个字，与旁边 12px 的文字天然对齐；
  * 换成 24px 画布的内联图标反而要再补一套对齐。`tone` 是交付物里 `.badge` 的
  * 四个修饰类，只管颜色。
+ *
+ * ⚠️ `label` 是 **`MsgKey` 而不是字符串**（与 `lib/CATEGORY_LABEL` 同一套写法），
+ * 所以取词的地方要写 `t(badge.label)`——类型让「有一条忘了包 `t()`」变成编译错误。
  */
-const STATUS_BADGE: Record<TaskStatus, { mark: string; label: string; tone: string }> = {
-  queued: { mark: '◆', label: '等待中', tone: 'waiting' },
-  waiting_engine: { mark: '◆', label: '等待引擎', tone: 'waiting' },
-  running: { mark: '◆', label: '调律中…', tone: 'converting' },
-  done: { mark: '✓', label: '已成', tone: 'done' },
-  error: { mark: '✕', label: '失败', tone: 'error' },
-  canceled: { mark: '—', label: '已止', tone: 'waiting' }
+const STATUS_BADGE: Record<
+  TaskStatus,
+  { mark: string; label: KeysOf<'workbench.status.'>; tone: string }
+> = {
+  queued: { mark: '◆', label: 'workbench.status.queued', tone: 'waiting' },
+  waiting_engine: { mark: '◆', label: 'workbench.status.waitingEngine', tone: 'waiting' },
+  running: { mark: '◆', label: 'workbench.status.running', tone: 'converting' },
+  done: { mark: '✓', label: 'workbench.status.done', tone: 'done' },
+  error: { mark: '✕', label: 'workbench.status.error', tone: 'error' },
+  canceled: { mark: '—', label: 'workbench.status.canceled', tone: 'waiting' }
 }
 
 /** 操作列里的小按钮。尺寸与 `.btn-*` 那三档不兼容（行高只有 56px），所以不复用它们 */
@@ -50,9 +61,9 @@ const ACTION_BUTTON =
  * `'open-folder'` 刻意**不在这里**：那一档与既有那个「打开位置」是同一件事
  *（`shell.showItemInFolder`），再放一个同样的按钮只会让操作列多一格。
  */
-const SHARE_LABEL: Partial<Record<AfterConvertAction, string>> = {
-  'copy-path': '复制路径',
-  'copy-file': '复制产物'
+const SHARE_LABEL: Partial<Record<AfterConvertAction, KeysOf<'workbench.share.'>>> = {
+  'copy-path': 'workbench.share.copyPath',
+  'copy-file': 'workbench.share.copyFile'
 }
 
 /**
@@ -97,13 +108,21 @@ export const TaskCard = memo(function TaskCard({ id }: { id: string }): React.JS
 
   /** 状态列里跟在徽章后面的那行小字：引擎给什么就说什么 */
   const detail = ((): string => {
-    if (task.status === 'error') return task.error ?? '转换失败'
+    // P7：优先用码——`task.error` 是失败那一刻那句中文的快照，而卡片会**一直**这么显示，
+    // 哪怕用户早就把界面切成英文了。没有码（老任务 / 还没加码的 throw 站点）时回落它。
+    if (task.status === 'error')
+      return errorText(task.errorRef, task.error ?? t('workbench.convertFailed'))
     if (progress === null) return ''
     if (progress.kind === 'determinate') {
       const parts: string[] = []
       // 有 stage 就先说在干什么（目前只有「正在下载 X 引擎…」走这条），
       // 再说百分比——反过来的话用户得先猜这几分钟在跑什么
-      if (progress.stage) parts.push(progress.stage)
+      //
+      // ⚠️ **这里优先用码取词**（`stageRef`），而不是直接用 `stage` 那串中文：
+      // 后者是**产出的那一刻**那门语言的快照，而任务可能跑几分钟，中途用户把界面
+      // 切成了英文。`stageText` 在没有码时回落到 `stage`（老任务的进度对象没有码）。
+      const stage = stageText(progress.stageRef, progress.stage ?? '')
+      if (stage) parts.push(stage)
       parts.push(`${Math.round(progress.percent * 100)}%`)
       const eta = formatEta(progress.etaSec)
       if (eta) parts.push(eta)
@@ -111,8 +130,10 @@ export const TaskCard = memo(function TaskCard({ id }: { id: string }): React.JS
       if (speed) parts.push(speed)
       return parts.join(' · ')
     }
-    if (progress.kind === 'indeterminate') return progress.stage
-    return `${progress.stage} ${progress.done}/${progress.total}`
+    if (progress.kind === 'indeterminate') {
+      return stageText(progress.stageRef, progress.stage)
+    }
+    return `${stageText(progress.stageRef, progress.stage)} ${progress.done}/${progress.total}`
   })()
 
   return (
@@ -138,7 +159,7 @@ export const TaskCard = memo(function TaskCard({ id }: { id: string }): React.JS
             {task.inputName}
           </p>
           <p className="mt-0.5 truncate text-[11px] tracking-[0.5px] text-fg-faint">
-            {task.fromExt.toUpperCase()} · {CATEGORY_LABEL[task.category]}
+            {task.fromExt.toUpperCase()} · {t(CATEGORY_LABEL[task.category])}
           </p>
           {/* 参数摘要。金色而不是灰色：它是**用户自己设的**东西，
               与上面那行「源格式 · 类别」这种描述性信息不是一类 */}
@@ -150,7 +171,10 @@ export const TaskCard = memo(function TaskCard({ id }: { id: string }): React.JS
 
       {/* 大小：源文件的体积主进程没有回传（`Task` 上只有产物体积），
           所以这一列在转换完成前是「—」，完成后是产物的体积 */}
-      <span className="font-mono text-xs tabular-nums text-fg-muted" title="产物体积">
+      <span
+        className="font-mono text-xs tabular-nums text-fg-muted"
+        title={t('workbench.outputSize')}
+      >
         {formatBytes(task.sizeBytes)}
       </span>
 
@@ -170,7 +194,7 @@ export const TaskCard = memo(function TaskCard({ id }: { id: string }): React.JS
             {/* 调律中才脉动。等待中不脉动是刻意的：一屏十几个等待行一起闪，
                 既晃眼又看不出「哪一个真的在动」 */}
             <span className={cn(isRunning && 'animate-pulse')}>{badge.mark}</span>
-            {badge.label}
+            {t(badge.label)}
           </span>
           {detail !== '' && (
             <span className="truncate font-mono text-[11px] text-fg-faint" title={detail}>
@@ -185,7 +209,7 @@ export const TaskCard = memo(function TaskCard({ id }: { id: string }): React.JS
             排在**排队中**才显示：开跑之后目标已经定死，再说「上次」只是噪音。 */}
         {presetExt !== undefined && task.status === 'queued' && (
           <p className="mt-0.5 truncate text-[11px] text-gold-pale">
-            上次这类文件转成了 {presetExt.toUpperCase()}
+            {t('workbench.presetHint')} {presetExt.toUpperCase()}
           </p>
         )}
 
@@ -201,7 +225,7 @@ export const TaskCard = memo(function TaskCard({ id }: { id: string }): React.JS
       <div className="flex flex-wrap items-center justify-end gap-x-1 gap-y-0.5">
         {isRunning && (
           <button type="button" onClick={() => void cancel([id])} className={ACTION_BUTTON}>
-            中止
+            {t('workbench.action.cancel')}
           </button>
         )}
 
@@ -212,35 +236,39 @@ export const TaskCard = memo(function TaskCard({ id }: { id: string }): React.JS
           <button
             type="button"
             disabled={isRunning}
-            title={isRunning ? '转换中不能改参数' : '设置转换参数'}
+            title={
+              isRunning
+                ? t('workbench.action.optionsTitleRunning')
+                : t('workbench.action.optionsTitle')
+            }
             onClick={() => setShowOptions((v) => !v)}
             className={cn(ACTION_BUTTON, isRunning && 'cursor-not-allowed opacity-40')}
           >
-            参数
+            {t('workbench.action.options')}
           </button>
         )}
 
         {canRetry && (
           <button type="button" onClick={() => void retry([id])} className={ACTION_BUTTON}>
-            再行调律
+            {t('workbench.action.retry')}
           </button>
         )}
 
         {hasLog && (
           <button type="button" onClick={() => setShowLog((v) => !v)} className={ACTION_BUTTON}>
-            日志
+            {t('workbench.action.log')}
           </button>
         )}
 
         {isDone && (
           <button
             type="button"
-            title="在文件夹中显示"
+            title={t('workbench.action.revealTitle')}
             onClick={() => void reveal([id])}
             className={cn(ACTION_BUTTON, 'inline-flex items-center gap-1')}
           >
             <Icon name="folder" size={13} />
-            打开位置
+            {t('workbench.action.reveal')}
           </button>
         )}
 
@@ -250,18 +278,22 @@ export const TaskCard = memo(function TaskCard({ id }: { id: string }): React.JS
         {isDone && SHARE_LABEL[afterConvert] !== undefined && (
           <button
             type="button"
-            title={afterConvert === 'copy-file' ? '把产物放进剪贴板' : '把产物路径放进剪贴板'}
+            title={
+              afterConvert === 'copy-file'
+                ? t('workbench.share.copyFileTitle')
+                : t('workbench.share.copyPathTitle')
+            }
             onClick={() => void runAfterAction(id)}
             className={ACTION_BUTTON}
           >
-            {SHARE_LABEL[afterConvert]}
+            {t(SHARE_LABEL[afterConvert])}
           </button>
         )}
 
         <button
           type="button"
-          title="删除"
-          aria-label="删除"
+          title={t('workbench.action.remove')}
+          aria-label={t('workbench.action.remove')}
           onClick={() => void remove([id])}
           className={cn(ACTION_BUTTON, 'inline-flex items-center p-1 hover:text-bad')}
         >
@@ -312,11 +344,13 @@ export function RejectedNotice({
             「收入文件夹」那条路会把目录也放进来（按默认排除清单跳过的、权限不足
             读不了的、还有一条「已达扫描上限」）——它们是「少了的东西去哪了」的答案，
             与逐条被拒的文件回答的是同一个问题，所以共用这一张清单 */}
-        <span className="flex-1 text-xs text-gold-pale">{items.length} 项未能收入队列</span>
+        <span className="flex-1 text-xs text-gold-pale">
+          {items.length} {t('workbench.rejectedCount')}
+        </span>
         <button
           type="button"
           onClick={onDismiss}
-          aria-label="收起"
+          aria-label={t('workbench.rejectedDismiss')}
           className="rounded p-0.5 text-fg-faint transition-colors hover:bg-hover hover:text-fg"
         >
           <Icon name="close" size={13} />

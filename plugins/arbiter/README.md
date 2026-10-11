@@ -30,6 +30,7 @@
 /arbiter:convert D:\素材\录屏.mkv mp4
 /arbiter:formats 视频
 /arbiter:watch                    # 定时盯住一个目录（见下）
+/arbiter:update                   # 查两边有没有新版本（见下）
 ```
 
 还有一处**不用你说就生效**的便利：装了插件之后，Read 一个 `.docx` / `.xlsx` /
@@ -68,11 +69,28 @@
 3. Windows：`%ProgramFiles%\Arbiter`、`%ProgramFiles(x86)%\Arbiter`
 4. macOS：`/Applications/Arbiter.app`
 5. Linux：`/opt/Arbiter`、`~/.local/share/Arbiter`
-6. 插件所在仓库根、当前工作目录（开发形态；**排在安装位置之后**，
+6. **Windows：注册表卸载表里记着的安装位置**（`HKCU` / `HKLM` 的
+   `…\CurrentVersion\Uninstall`）——**安装向导里改了目录就靠这一条**
+7. 插件所在仓库根、当前工作目录（开发形态；**排在安装位置之后**，
    装了应用的用户不会被一个顺手 clone 的仓库抢走）
 
-在前五条都不存在时，第 6 条至少能让「clone 了仓库 + `npm run build`」的开发机跑起来；
+在前六条都不存在时，第 7 条至少能让「clone 了仓库 + `npm run build`」的开发机跑起来；
 仓库没构建时它让位给已安装的应用（判据是 `usable`，不是「目录存在」）。
+
+> **第 6 条是 2026-09-17 补的。** 在那之前只认上面那三个默认位置，而安装向导**允许改**：
+> 把应用装到 `D:\tools\Arbiter` 的用户，插件会报「没有在本机找到可用的 Arbiter」并退出，
+> 而应用本身好好的、命令行也能用。开发机上永远撞不到（有仓库根那条候选兜着），
+> 属于**只在用户机器上现形**的那一类。
+>
+> 读注册表时两条判据都要：`DisplayName` **恰好**是 `Arbiter`（`reg query /f` 是子串匹配，
+> `Arbiter Beta` 这类邻居条目会一起被捞出来），目录从 `DisplayIcon` / `UninstallString`
+> 反推且**先剥引号再按 `.exe` 截**（路径里可能有空格）。代价实测（各 5 次取中位）：
+> `HKCU` 那次 17.8 ms、`HKLM` 36.3 ms，合计约 **77 ms**（两个键各起一个 `reg.exe`）。
+> 守卫：`npm run test:plugin-target`（30 条）+ `npm run falsify:plugin-target`（14 个变异）。
+>
+> ⚠️ **已知边界**：挑的规则是「第一条**可用**的候选」，所以盘上同时存在**两份**安装时
+> 谁赢由次序决定——残留在标准位置的旧副本会压过注册表里新装到别处的那份。这是既有的
+> 边界，不是这一版引入的；真要解决得比较版本或时间戳。
 
 找到之后，用它的 Electron 二进制以 `ELECTRON_RUN_AS_NODE=1` 跑应用内部的
 `resources/app.asar/out/main/mcp.js`。所以**插件不占额外体积**，也永远是和应用同版本的一套逻辑。
@@ -140,6 +158,54 @@ arbiter --version
 其中一条必须先说：**关掉 Claude Code 它就停了**——它不是后台服务。
 ⚠️ 另外，**别把「重命名即转换」（应用设置里那个开关）和它开在同一个目录上**。
 
+## 检查更新
+
+```
+/arbiter:update              # 只查，什么都不下
+/arbiter:update --download   # 查 + 把安装包下到下载目录
+```
+
+它同时看**两边**：本机装着的 Arbiter 应用，以及这个插件自己。
+
+| 读什么   | 从哪读                                                                       |
+| -------- | ---------------------------------------------------------------------------- |
+| 应用版本 | 直读安装目录里 `resources/app.asar` 里的 `package.json`（毫秒级，**不起 Electron**） |
+| 最新版本 | `GET api.github.com/repos/Polaris-bit189/Arbiter/releases/latest`             |
+| 插件版本 | `~/.claude/plugins/installed_plugins.json` + marketplace 源里的 `plugin.json` |
+
+⚠️ **它不安装任何东西。** `--download` 只把 `Arbiter-<版本>-setup.exe` 下到下载目录（尊重
+环境变量 `ARBITER_DOWNLOADS`）并**校验 sha256**——校验和优先取 release 自带的 `digest`
+字段，取不到才回落去解析 `SHA256SUMS.txt`；**两个都取不到就拒绝下载**（宁可不下，也不给
+你一个验证不了的 140 MB）。装不装由你决定；**装之前记得先退出正在运行的 Arbiter**。
+
+⚠️ **「没查成」不等于「已经是最新」。** 没网、被限流、证书没过都会明确报出来并给下一步，
+它们**不会**被折成一句「已是最新」——这条差别是刻意做的：说反了，你会以为自己不用更新。
+
+⚠️ **本机若把 GitHub 域名指到了本地转发服务**（或网络做了 TLS 拦截），会报
+`tls_certificate`。那是**本机网络环境**的事，不是脚本坏了：按它给的提示，把同一条命令前面
+加上 `node --use-system-ca` 即可。
+
+插件那一半只会**告诉你跑哪两条命令**，不会替你执行：
+
+```
+claude plugin marketplace update arbiter
+claude plugin update arbiter@arbiter --yes
+```
+
+跑完**要重启 Claude Code 才生效**——在会话中途换掉正在用的插件不是该由它替你做主的事。
+
+### 会话开始时那句提醒
+
+装了这个插件之后，**每次新开会话**它会轻量看一眼有没有新版本，有就在上下文里提一句
+（`SessionStart` hook，见 `hooks/hooks.json`）。没网、没新版、读不到应用——一律**完全静默**：
+空 stdout + 退出码 0，不报错也不拖慢会话启动。
+
+查询结果缓存在系统临时目录：**查到了缓存 12 小时，没查到缓存 1 小时**。后者刻意短，
+这样网络一恢复就能提示上，而不是让你干等半天。
+
+> ⚠️ 想彻底关掉它只能关掉插件的 hook（`disableAllHooks`，或禁用整个插件）——
+> 目前没有「单独关这一条」的开关。
+
 ## 要求
 
 - **Node.js**：启动器本身是个 Node 脚本（`.mcp.json` 里用 `node` 起）。
@@ -186,6 +252,14 @@ claude plugin install arbiter@arbiter
 # 打包分支的验收（要先 npm run build:unpack）
 npm run test:plugin
 npm run falsify:plugin-launch
+
+# 「找应用」那一步的验收：纯逻辑 + 一次临时注册表键往返，秒级、不用构建（进聚合）
+npm run test:plugin-target
+npm run falsify:plugin-target
+
+# 「检查更新」的验收：纯逻辑 + 注入的假 fetch，不碰网络、不起进程，秒级（进聚合）
+npm run test:plugin-update
+npm run falsify:plugin-update
 ```
 
 ⚠️ **`claude --plugin-dir <path>` 只注册技能，不会暴露插件的 MCP 工具。**（实测 2026-09-13：

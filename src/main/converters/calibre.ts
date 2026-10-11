@@ -1,6 +1,7 @@
 import { spawn } from 'child_process'
 import { mkdir, stat } from 'fs/promises'
 import { join, resolve } from 'path'
+import { stagePair } from '@shared/i18n/stage'
 import { appPaths } from '../core/appPaths'
 import type { CancelToken } from '../core/cancel'
 import { killTree } from '../core/kill'
@@ -322,7 +323,7 @@ export async function runCalibre(context: ConvertContext): Promise<void> {
 
   try {
     await removeQuietly(tempOut)
-    onProgress({ kind: 'indeterminate', stage: '启动 Calibre…' })
+    onProgress({ kind: 'indeterminate', ...stagePair({ key: 'stage.calibre.start' }) })
 
     // 一律传绝对路径（约束 2）：文件名里的空格、引号、`&`、`$()`、中文、emoji 都天然无害
     // （全程数组参数、不经 shell），以 `-` 开头的文件名被 `resolve` 一改也就不再像选项了。
@@ -331,7 +332,7 @@ export async function runCalibre(context: ConvertContext): Promise<void> {
       cancel,
       exe,
       configDir,
-      () => onProgress({ kind: 'indeterminate', stage: '转换中…' })
+      () => onProgress({ kind: 'indeterminate', ...stagePair({ key: 'stage.converting' }) })
     )
 
     await ensureProduced(tempOut)

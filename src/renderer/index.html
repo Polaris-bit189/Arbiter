@@ -2,7 +2,13 @@
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
-    <title>调律者转换器</title>
+    <!--
+      静态标题只是「JS 起来之前」那几毫秒的字样。运行时由 `App.tsx` 的
+      `document.title = t('app.title')` 接管（语言一定，标题就跟着变）。
+      这里刻意写语言中立的产品名而不是中文：写中文的话，英文用户在窗口标题上
+      会看到一闪而过的中文。`<html lang="zh-CN">` 同样由运行时改。
+    -->
+    <title>Arbiter</title>
     <!--
       CSP。**dev 与打包共用这一份**（渲染进程只有一个 index.html），所以这里写的是
       「打包后也不能再宽」的那一档。

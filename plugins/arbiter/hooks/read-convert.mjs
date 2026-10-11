@@ -41,6 +41,7 @@ import { tmpdir } from 'os'
 import { basename, extname, join } from 'path'
 
 import { CLI_ENTRY, entryEnv, resolveTarget } from '../mcp/target.mjs'
+import { t } from '../mcp/i18n.mjs'
 
 /**
  * 值得转的扩展名 → 转成什么。
@@ -85,7 +86,7 @@ const log = (message) => process.stderr.write(`[arbiter-hook] ${message}\n`)
 
 /** 什么都不做、什么都不说地放行。**所有**失败路径都走它。 */
 function pass(reason) {
-  if (reason) log(`${reason} —— 放行（不改写这次 Read）`)
+  if (reason) log(t('passSuffix', { reason }))
   process.exit(0)
 }
 
@@ -198,35 +199,34 @@ function pruneCache() {
 
 async function main() {
   const raw = readStdin()
-  if (raw.trim() === '') return pass('stdin 是空的')
+  if (raw.trim() === '') return pass(t('passEmptyStdin'))
 
   let input
   try {
     input = JSON.parse(raw)
   } catch {
-    return pass('stdin 不是合法 JSON')
+    return pass(t('passBadJson'))
   }
 
   // 事件名要核：一个 hook 脚本被配到别的 matcher 上时，这里能挡住误用。
   if (input?.hook_event_name !== 'PreToolUse')
-    return pass(`事件不是 PreToolUse：${input?.hook_event_name}`)
-  if (input?.tool_name !== 'Read') return pass(`工具不是 Read：${input?.tool_name}`)
+    return pass(t('passWrongEvent', { event: input?.hook_event_name }))
+  if (input?.tool_name !== 'Read') return pass(t('passWrongTool', { tool: input?.tool_name }))
 
   const toolInput = input?.tool_input
   const filePath = toolInput?.file_path
-  if (typeof filePath !== 'string' || filePath === '')
-    return pass('tool_input.file_path 不是非空字符串')
+  if (typeof filePath !== 'string' || filePath === '') return pass(t('passBadPath'))
 
   const ext = extname(filePath).replace(/^\./, '').toLowerCase()
   const to = PLAN[ext]
-  if (to === undefined) return pass(`.${ext} 不在快转表里`)
+  if (to === undefined) return pass(t('passExtNotInTable', { ext }))
 
   // 找本机的 Arbiter。找不到、没有 Electron、或者这份安装包还没有 CLI 入口（早于 0.3.0）
   // ——统统放行。**判据是 `usable`，不是 `existsSync(target.entry)`**：打包形态下那个
   // 路径指向 asar 内部，普通 Node 的 `existsSync` 恒为 false（见 `mcp/asar.mjs`）。
   const target = resolveTarget(CLI_ENTRY)
-  if (!target || !target.electron) return pass('本机没有找到可用的 Arbiter')
-  if (!target.usable) return pass(`找到了 ${target.root}，但里面没有 CLI 入口（out/main/cli.js）`)
+  if (!target || !target.electron) return pass(t('passNoApp'))
+  if (!target.usable) return pass(t('passNoCli', { root: target.root }))
 
   const outPath = cachePathFor(filePath, to)
 
@@ -236,7 +236,7 @@ async function main() {
     try {
       mkdirSync(CACHE_DIR, { recursive: true })
     } catch {
-      return pass('临时目录建不出来')
+      return pass(t('passNoTmp'))
     }
     pruneCache()
 
@@ -248,8 +248,8 @@ async function main() {
     // 退出码 0 才算数。1（转换失败）/ 2（参数错）/ 3（引擎没装）/ 130（被打断）
     // 一律放行——用户至少还能看到 Read 的原始结果（对 docx 是一屏乱码，
     // 但那本来就是他会得到的东西，我们没有把事情变得更坏）。
-    if (!ok) return pass('CLI 没能完成这次转换')
-    if (!isFresh(outPath, filePath)) return pass('CLI 退出了，但产物不在或为空')
+    if (!ok) return pass(t('passCliFailed'))
+    if (!isFresh(outPath, filePath)) return pass(t('passNoOutput'))
   }
 
   // 改写。`updatedInput` 是**整份替换**，所以必须把原来的字段全部带上
@@ -261,9 +261,7 @@ async function main() {
       // （也就压不过受保护路径）。用在这里是合适的：用户本来就是要读这个文件的
       // 内容，我们只是换了一份能读的表示，而且源文件一个字节都没动。
       permissionDecision: 'allow',
-      permissionDecisionReason:
-        `Arbiter（调律者转换器）已把这份 .${ext} 转成 .${to} 的临时副本：${outPath}` +
-        `（源文件未改动）。读完不必删它——它在系统临时目录里，会自己过期。`,
+      permissionDecisionReason: t('rewritten', { ext, to, out: outPath }),
       updatedInput: { ...toolInput, file_path: outPath }
     }
   }
@@ -277,6 +275,6 @@ async function main() {
 
 main().catch((error) => {
   // 兜底：`main()` 里任何一处漏掉的异常都不能变成一次拦截。
-  log(`内部错误：${error instanceof Error ? error.message : String(error)} —— 放行`)
+  log(t('passInternal', { message: error instanceof Error ? error.message : String(error) }))
   process.exit(0)
 })

@@ -1,4 +1,5 @@
 import { spawn } from 'child_process'
+import { t, type KeysOf } from '@shared/i18n'
 import { appPaths } from './appPaths'
 import { buildContextMenuCommand, quoteWindowsArg } from './cli'
 
@@ -62,8 +63,15 @@ export function contextMenuRoot(): string {
   return root
 }
 
-/** 动词的显示名。中文名与产品的中文显示名一致（见 docs/NOTES.md 的项目概述） */
-const MENU_LABEL = '用调律者转换'
+/**
+ * 动词的显示名。中文名与产品的中文显示名一致（见 docs/NOTES.md 的项目概述）。
+ *
+ * ⚠️ **这里存的是键，不是句子**。它是个模块级常量，而本模块一个进程里只被加载一次，
+ * 写成 `const MENU_LABEL = t('integration.menu.label')` 会让它**永远停在加载时那门语言**
+ * 上——用户在设置页改成英文之后，菜单标签不会跟着变，且没有任何地方报错。
+ * 取词放在真正用到它的那一处（`installContextMenu`），与渲染层 `CATEGORY_LABEL` 同形。
+ */
+const MENU_LABEL: KeysOf<'integration.menu.'> = 'integration.menu.label'
 
 interface RegResult {
   code: number | null
@@ -115,7 +123,7 @@ function runReg(args: string[]): Promise<RegResult> {
     try {
       child = spawn('reg.exe', args, { windowsHide: true })
     } catch {
-      return done({ code: -1, stdout: '', stderr: '无法启动 reg.exe' })
+      return done({ code: -1, stdout: '', stderr: t('integration.reg.spawnFailed') })
     }
 
     const out: Buffer[] = []
@@ -271,7 +279,7 @@ export async function readContextMenu(): Promise<ContextMenuState> {
     // 而且它是 GBK 写出来的（见 decodeRegOutput）。这一版最初写成
     // `/find|找到|cannot find/` 去认，结果在中文系统上拿到的是乱码，一律判成「真错误」——
     // 于是「重复卸载」这条幂等路径整条失效。
-    const error = query.code === -1 ? query.stderr || 'reg.exe 不可用' : null
+    const error = query.code === -1 ? query.stderr || t('integration.reg.unavailable') : null
     return { installed: false, command: null, expected, error }
   }
 
@@ -293,7 +301,7 @@ export async function installContextMenu(): Promise<ContextMenuState> {
   const command = expectedCommand()
 
   const steps: string[][] = [
-    ['add', root, '/ve', '/d', MENU_LABEL, '/f'],
+    ['add', root, '/ve', '/d', t(MENU_LABEL), '/f'],
     ['add', root, '/v', 'Icon', '/d', `${quoteWindowsArg(process.execPath)},0`, '/f'],
     // 多选时**隐藏**本项。`%1` 只替换成第一个选中文件的路径，不设这个值的话
     // 用户框选 10 个文件点一下，会只转一个、而且没有任何提示——静默地少干活。
@@ -308,7 +316,9 @@ export async function installContextMenu(): Promise<ContextMenuState> {
         installed: false,
         command: null,
         expected: command,
-        error: (result.stderr || `reg.exe 退出码 ${String(result.code)}`).trim()
+        error: (
+          result.stderr || t('integration.reg.exitCode', { code: String(result.code) })
+        ).trim()
       }
     }
   }
@@ -335,7 +345,7 @@ export async function uninstallContextMenu(): Promise<ContextMenuState> {
       installed: true,
       command: null,
       expected,
-      error: (removed.stderr || 'reg.exe 不可用').trim()
+      error: (removed.stderr || t('integration.reg.unavailable')).trim()
     }
   }
 

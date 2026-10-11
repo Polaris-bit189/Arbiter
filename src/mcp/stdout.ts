@@ -75,6 +75,9 @@ export function protectStdout(): void {
       pending = pending.slice(index + 1)
       if (isJsonRpcFrame(line)) framed += `${line}\n`
       else {
+        // ⚠️ 这一句**故意不进字典**（C 类，约束 43）：它是协议守卫的开发者诊断，
+        // 而它后面跟着的 `line` 就是那段**脏内容原文**——原始记录，永不翻译。
+        // 逐条清单见 `@shared/i18n/parts/mcpMain.ts` 的文件头。
         process.stderr.write(
           `[arbiter-mcp] 拦下一段非 JSON-RPC 的 stdout 写入（它本会破坏协议帧）：${line}\n`
         )

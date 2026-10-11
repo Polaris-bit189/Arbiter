@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readdir, rm, stat } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { extOf } from '@shared/formats'
+import { stagePair } from '@shared/i18n/stage'
 import type { TaskProgress } from '@shared/types'
 import { sevenZipEngine } from '../engines/sevenzip'
 import { partPathOf } from '../core/outputName'
@@ -284,7 +285,7 @@ export async function runArchive(options: ConvertContext): Promise<void> {
     await removeQuietly(tempOut)
 
     // 第一条百分比记录到来之前先给个阶段文案，否则 UI 会空着
-    onProgress({ kind: 'indeterminate', stage: '拆开压缩包…' })
+    onProgress({ kind: 'indeterminate', ...stagePair({ key: 'stage.archive.extract' }) })
 
     const contentDir = await unwrapAll(engine.path, input, root, fromExt, cancel, onProgress)
 

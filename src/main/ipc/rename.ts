@@ -1,4 +1,5 @@
 import { BrowserWindow, Notification, dialog, ipcMain } from 'electron'
+import { t } from '@shared/i18n'
 import { CH } from '@shared/ipc-contract'
 import { getSettings, updateSettings } from '../core/settings'
 import { RenameWatcher } from '../core/renameWatcher'
@@ -29,19 +30,19 @@ function notify(title: string, body: string): void {
     // `isSupported()` 在个别 Windows 环境上是 false（通知被策略关掉）。
     // 那种情况下 `.show()` 不抛异常、也不显示——所以**先问一句**，别静默丢消息。
     if (!Notification.isSupported()) {
-      console.warn(`[rename] 系统通知不可用，消息只留在终端：${title} — ${body}`)
+      console.warn(t('integration.log.notifyUnsupported', { title, body }))
       return
     }
     new Notification({ title, body }).show()
   } catch (err) {
-    console.warn('[rename] 弹系统通知失败：', err)
+    console.warn(t('integration.log.notifyFailed'), err)
   }
 }
 
 function warn(message: string): void {
   // 刻意不弹框：用户只是改了个文件名，一个模态框会把它变成一件「出事了」的事。
   console.warn(`[rename] ${message}`)
-  notify('调律者转换器', message)
+  notify(t('integration.notify.title'), message)
 }
 
 /**
@@ -69,7 +70,9 @@ export async function syncRenameWatch(): Promise<void> {
         // 这里再说一遍就是同一件事说两次，而且说不出后半句。
         return {
           ok: false,
-          reason: result.rejected.map((r) => r.reason).join('；') || '原因不明'
+          reason:
+            result.rejected.map((r) => r.reason).join(t('integration.rename.reasonSep')) ||
+            t('integration.rename.reasonUnknown')
         }
       },
       notify,
@@ -91,11 +94,11 @@ export function registerRenameIpc(): void {
     const window = BrowserWindow.fromWebContents(event.sender)
     const result = window
       ? await dialog.showOpenDialog(window, {
-          title: '选择要监听的文件夹',
+          title: t('integration.rename.pickDirTitle'),
           properties: ['openDirectory', 'createDirectory']
         })
       : await dialog.showOpenDialog({
-          title: '选择要监听的文件夹',
+          title: t('integration.rename.pickDirTitle'),
           properties: ['openDirectory', 'createDirectory']
         })
 
@@ -115,7 +118,7 @@ export function registerRenameIpc(): void {
     const target = typeof raw === 'string' ? raw : null
     if (target === null) {
       // 与 settings:set 同一个口径：被拒比被静默忽略好，但痕迹要留在终端上。
-      console.warn('[rename] 拒绝了一份不合规的移除请求：', raw)
+      console.warn(t('integration.log.removeRejected'), raw)
       return getSettings().renameConvertDirs
     }
     const dirs = getSettings().renameConvertDirs.filter((dir) => dir !== target)

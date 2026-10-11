@@ -1,3 +1,4 @@
+import { LOCALES, t, type KeysOf, type LocaleSetting } from '@shared/i18n'
 import { CATEGORIES, type Category, type Settings } from '@shared/types'
 import { targetsForCategory } from '@shared/formats'
 import { Icon } from '../components/Icon'
@@ -11,14 +12,21 @@ import { useIntegration } from '../store/useIntegration'
 /** 「没有偏好」那一档的值。**不能是空扩展名**——见 `setCategoryTarget` 的注释 */
 const INHERIT = ''
 
+// ⚠️ `KeysOf<'settings.conflict.'>` 而不是整个 `MsgKey`：后者会把 `eta.seconds` 那种
+// **带占位符**的键也收进来，于是 `t(label)` 报「Expected 2 arguments」——一个与本表
+// 毫无关系的假错误（见 `types.ts` 里 `KeysOf` 的说明）。
 const CONFLICT_OPTIONS: ReadonlyArray<{
   value: Settings['onConflict']
-  label: string
-  hint: string
+  label: KeysOf<'settings.conflict.'>
+  hint: KeysOf<'settings.conflict.'>
 }> = [
-  { value: 'rename', label: '另起一名', hint: '同名文件保留，新产物自动加序号' },
-  { value: 'overwrite', label: '取而代之', hint: '直接覆盖同名文件，旧产物不再保留' },
-  { value: 'skip', label: '略过', hint: '同名文件已存在时不再转换' }
+  { value: 'rename', label: 'settings.conflict.rename', hint: 'settings.conflict.rename.hint' },
+  {
+    value: 'overwrite',
+    label: 'settings.conflict.overwrite',
+    hint: 'settings.conflict.overwrite.hint'
+  },
+  { value: 'skip', label: 'settings.conflict.skip', hint: 'settings.conflict.skip.hint' }
 ]
 
 /** 并发上限的可选范围。16 是 `settingsPatchSchema` 的上界，两处必须一致 */
@@ -30,33 +38,52 @@ const CONCURRENCY_CHOICES = Array.from({ length: 16 }, (_, i) => i + 1)
  */
 const AFTER_OPTIONS: ReadonlyArray<{
   value: Settings['afterConvert']
-  label: string
-  hint: string
+  label: KeysOf<'settings.after.'>
+  hint: KeysOf<'settings.after.'>
 }> = [
-  { value: 'none', label: '什么都不做', hint: '默认：不动你的剪贴板' },
-  { value: 'copy-path', label: '复制路径', hint: '把产物的完整路径放进剪贴板' },
+  { value: 'none', label: 'settings.after.none', hint: 'settings.after.none.hint' },
+  { value: 'copy-path', label: 'settings.after.copyPath', hint: 'settings.after.copyPath.hint' },
   {
     value: 'copy-file',
-    label: '复制产物本身',
-    hint: '把文件放进剪贴板，可以直接粘到别处；产物偏大时会改成复制路径并说明'
+    label: 'settings.after.copyFile',
+    hint: 'settings.after.copyFile.hint'
   },
-  { value: 'open-folder', label: '打开目录', hint: '在资源管理器里打开并选中产物' }
+  {
+    value: 'open-folder',
+    label: 'settings.after.openFolder',
+    hint: 'settings.after.openFolder.hint'
+  }
 ]
 
 /**
  * 快捷键的文案（E-7）。**键位不在这里**——那张表在 `lib/shortcuts.ts` 里，
  * 紧挨着判据放，测试才有办法拿它去喂 `resolveShortcut`（见那边的 `SHORTCUT_TABLE`）。
  *
- * 类型写成 `Record<ShortcutAction, string>`：将来加第四个快捷键而忘了写文案，
- * 是**编译错误**，不是界面上一片空白。
+ * 类型写成 `Record<ShortcutAction, KeysOf<'settings.shortcuts.'>>`：将来加第四个快捷键
+ * 而忘了写文案，是**编译错误**，不是界面上一片空白。
+ *
+ * ⚠️ 存的是**键**而不是字符串：模块级常量不会随语言重算，直接取词会「切了英文这一节
+ * 还是中文」——`App.tsx` 的 `key={locale}` 重挂的是组件树，不是模块。
  */
-const SHORTCUT_HELP: Record<ShortcutAction, string> = {
-  'pick-files': '收入文件（同「收入文件」按钮）',
-  start: '开始调律（队列里有待跑的才有用）',
-  'cancel-running': '取消正在跑的转换——源文件一个字节都不动，随时可以重跑'
+const SHORTCUT_HELP: Record<ShortcutAction, KeysOf<'settings.shortcuts.'>> = {
+  'pick-files': 'settings.shortcuts.pickFiles',
+  start: 'settings.shortcuts.start',
+  'cancel-running': 'settings.shortcuts.cancelRunning'
 }
 
 /* ------------------------------------------------------------------ 零件 */
+
+/**
+ * 三档语言的名字**都在字典里**，这里只是一张映射。
+ *
+ * 写成 `Record<LocaleSetting, MsgKey>` 而不是三个字面量分支：漏一档是**编译错误**，
+ * 而分支写法漏一档只是那个选项不出现——一个没人会发现的静默缺失。
+ */
+const LANGUAGE_LABEL: Record<LocaleSetting, KeysOf<'settings.language.'>> = {
+  system: 'settings.language.system',
+  zh: 'settings.language.zh',
+  en: 'settings.language.en'
+}
 
 function Section({
   title,
@@ -178,7 +205,7 @@ export function SettingsPage(): React.JSX.Element {
   // `App.tsx` 挂载时就调了 init()，正常路径上这里不会为空。兜底一是为了类型收窄，
   // 二是万一将来这一页被单独挂到别处，也不要当场崩。
   if (settings === null) {
-    return <div className="px-6 py-5 text-[13px] text-fg-muted">正在读取设置…</div>
+    return <div className="px-6 py-5 text-[13px] text-fg-muted">{t('settings.loading')}</div>
   }
 
   // 生效模式由**两个字段一起**决定，判据必须与主进程的 `outputDirFor()` 一致：
@@ -192,7 +219,7 @@ export function SettingsPage(): React.JSX.Element {
       <header className="flex items-center gap-2.5">
         <Icon name="diamond" size={14} className="shrink-0 text-gold" />
         <h1 className="grad-gold-text font-display text-[23px] font-semibold tracking-[6px]">
-          格式设置
+          {t('settings.title')}
         </h1>
       </header>
 
@@ -203,16 +230,18 @@ export function SettingsPage(): React.JSX.Element {
           审计把这条叫「数据那一半修好、界面那一半缺位」。 */}
       {corruption !== null && (
         <div className="mt-4 rounded-card border border-line-2 bg-abyss p-3">
-          <p className="text-[12px] tracking-[0.5px] text-bad">设置文件读不动，已重置为默认值</p>
+          <p className="text-[12px] tracking-[0.5px] text-bad">{t('settings.corruption.title')}</p>
           <p className="mt-1 text-[11px] leading-relaxed text-fg-muted">
-            出错的文件：<span className="font-mono text-fg-faint">{corruption.file}</span>
+            {t('settings.corruption.file')}
+            <span className="font-mono text-fg-faint">{corruption.file}</span>
             <br />
-            原因：{corruption.reason}
+            {t('settings.corruption.reason')}
+            {corruption.reason}
           </p>
           <p className="mt-1 text-[11px] leading-relaxed text-fg-faint">
             {corruption.quarantinePath === null
-              ? '原文件仍在原地（改名留档失败了），但内容没有被覆盖——先把它拷出来再改设置，否则下一次写盘会覆盖它。'
-              : `原文件已留档到 ${corruption.quarantinePath}，内容一个字节都没被动过。`}
+              ? t('settings.corruption.kept')
+              : t('settings.corruption.quarantined', { path: corruption.quarantinePath })}
           </p>
         </div>
       )}
@@ -230,12 +259,34 @@ export function SettingsPage(): React.JSX.Element {
 
       {/* ------------------------------------------------------ 各类别默认目标 */}
 
-      <Section title="各类别默认目标" hint="源格式不支持时会自动改用该格式的默认目标">
+      {/*
+        ⚠️ 这是**唯一**能改语言的地方，放在最上面：它是这一页里唯一一个「值不同则整棵
+        界面都不同」的设置项，埋在底下会让人以为这软件没有英文。
+      */}
+      <Section title={t('settings.language')} hint={t('settings.language.hint')}>
+        <div>
+          <Row label={t('settings.language')}>
+            <select
+              className="select-dark"
+              value={settings.language}
+              onChange={(e) => void update({ language: e.target.value as LocaleSetting })}
+            >
+              {LOCALES.map((one) => (
+                <option key={one} value={one}>
+                  {t(LANGUAGE_LABEL[one])}
+                </option>
+              ))}
+            </select>
+          </Row>
+        </div>
+      </Section>
+
+      <Section title={t('settings.category.title')} hint={t('settings.category.hint')}>
         <div>
           {CATEGORIES.map((category) => {
             const current = settings.defaultTargets[category] ?? INHERIT
             return (
-              <Row key={category} label={CATEGORY_LABEL[category]}>
+              <Row key={category} label={t(CATEGORY_LABEL[category])}>
                 <select
                   className="select-dark"
                   value={current}
@@ -248,7 +299,7 @@ export function SettingsPage(): React.JSX.Element {
                 >
                   {/* 空值那一档表示「没有偏好」，不是「偏好是空」——提交时会把键删掉，
                       于是这个类别又回到 `defaultTargetFor()` 的内建偏好。 */}
-                  <option value={INHERIT}>随源格式而定</option>
+                  <option value={INHERIT}>{t('settings.category.inherit')}</option>
                   {optionsFor(category, current).map((ext) => (
                     <option key={ext} value={ext}>
                       {ext}
@@ -263,14 +314,18 @@ export function SettingsPage(): React.JSX.Element {
 
       {/* ---------------------------------------------------------- 输出目录 */}
 
-      <Section title="输出目录">
+      <Section title={t('settings.output.title')}>
         <div>
-          <Row label="写入何处">
+          <Row label={t('settings.output.where')}>
             <Segmented
               value={besideSource ? 'beside' : 'custom'}
               options={[
-                { value: 'beside', label: '源文件所在目录' },
-                { value: 'custom', label: '指定目录', hint: outputDir ?? '尚未指定' }
+                { value: 'beside', label: t('settings.output.beside') },
+                {
+                  value: 'custom',
+                  label: t('settings.output.custom'),
+                  hint: outputDir ?? t('settings.output.unset')
+                }
               ]}
               onChange={(next) => {
                 if (next === 'beside') {
@@ -289,7 +344,7 @@ export function SettingsPage(): React.JSX.Element {
           </Row>
 
           {!besideSource && outputDir !== null && (
-            <Row label="目录">
+            <Row label={t('settings.output.dir')}>
               <div className="flex items-center gap-3">
                 <span
                   className="min-w-0 truncate font-mono text-[12px] text-fg-muted"
@@ -302,7 +357,7 @@ export function SettingsPage(): React.JSX.Element {
                   className="btn-secondary shrink-0"
                   onClick={() => void pickOutputDir()}
                 >
-                  更改
+                  {t('settings.output.change')}
                 </button>
               </div>
             </Row>
@@ -312,12 +367,16 @@ export function SettingsPage(): React.JSX.Element {
 
       {/* ---------------------------------------------------------- 同名文件 */}
 
-      <Section title="同名文件">
+      <Section title={t('settings.conflict.title')}>
         <div>
-          <Row label="已存在时">
+          <Row label={t('settings.conflict.label')}>
             <Segmented
               value={settings.onConflict}
-              options={CONFLICT_OPTIONS}
+              options={CONFLICT_OPTIONS.map((opt) => ({
+                value: opt.value,
+                label: t(opt.label),
+                hint: t(opt.hint)
+              }))}
               onChange={(next) => void update({ onConflict: next })}
             />
           </Row>
@@ -326,9 +385,9 @@ export function SettingsPage(): React.JSX.Element {
 
       {/* ---------------------------------------------------------- 并发上限 */}
 
-      <Section title="并发上限" hint="同时最多调律几个任务。越大越吃 CPU，界面也越容易卡。">
+      <Section title={t('settings.concurrency.title')} hint={t('settings.concurrency.hint')}>
         <div>
-          <Row label="同时最多">
+          <Row label={t('settings.concurrency.label')}>
             <select
               className="select-dark"
               value={String(settings.maxConcurrent)}
@@ -346,12 +405,9 @@ export function SettingsPage(): React.JSX.Element {
 
       {/* ------------------------------------------------------ 引擎未备时跳过 */}
 
-      <Section
-        title="引擎未备时跳过"
-        hint="引擎尚未备妥的文件不会先排进队列干等，直接略过——之后补好引擎再拖一次即可。"
-      >
+      <Section title={t('settings.skip.title')} hint={t('settings.skip.hint')}>
         <div>
-          <Row label="引擎未备">
+          <Row label={t('settings.skip.label')}>
             <label className="flex items-center gap-2.5 text-[13px] text-fg">
               <input
                 type="checkbox"
@@ -363,7 +419,7 @@ export function SettingsPage(): React.JSX.Element {
                 // Tailwind 桥接就少一处可能对不上的地方。
                 style={{ accentColor: 'var(--c-gold)' }}
               />
-              引擎未备时跳过
+              {t('settings.skip.checkbox')}
             </label>
           </Row>
         </div>
@@ -371,12 +427,9 @@ export function SettingsPage(): React.JSX.Element {
 
       {/* -------------------------------------------------------- GPU 硬件编码 */}
 
-      <Section
-        title="GPU 硬件编码"
-        hint="用 NVIDIA 显卡编码视频，速度优先。只在难编的素材上是净赚（实测同规格下 3.89s → 2.89s），好编的素材反而更慢（1.77s → 2.16s），所以默认不开。没卡或驱动不支持时会自动改用 CPU。"
-      >
+      <Section title={t('settings.gpu.title')} hint={t('settings.gpu.hint')}>
         <div>
-          <Row label="硬件编码">
+          <Row label={t('settings.gpu.label')}>
             <label className="flex items-center gap-2.5 text-[13px] text-fg">
               <input
                 type="checkbox"
@@ -385,7 +438,7 @@ export function SettingsPage(): React.JSX.Element {
                 className="size-4 shrink-0"
                 style={{ accentColor: 'var(--c-gold)' }}
               />
-              速度优先（GPU）
+              {t('settings.gpu.checkbox')}
             </label>
           </Row>
         </div>
@@ -394,19 +447,25 @@ export function SettingsPage(): React.JSX.Element {
       {/* -------------------------------------------------- 转换完成之后做什么 */}
 
       <Section
-        title="转换完成之后"
+        title={t('settings.after.title')}
         hint={
-          '省掉「去文件夹里找」那一步：转换完成后直接把它送到手边。' +
-          '⚠️ 只有 1 个文件转完时才会自动做这件事——一次转几十个的时候剪贴板只有一个格子，' +
-          '我们无从知道你要的是哪一个，那种情况下请用卡片上的按钮逐个点。' +
-          '⚠️ 剪贴板随时会被别的程序接管，所以复制之后会留一条回执，写着复制的是什么，并给你一次「再复制一次」。'
+          // ⚠️ 四段分开取词后拼接，与迁移前那句字符串表达式**逐字节相同**——
+          // 字典里也刻意分成四条键，理由见 `parts/settings.ts` 的文件头。
+          t('settings.after.hint1') +
+          t('settings.after.hint2') +
+          t('settings.after.hint3') +
+          t('settings.after.hint4')
         }
       >
         <div>
-          <Row label="完成后">
+          <Row label={t('settings.after.label')}>
             <Segmented
               value={settings.afterConvert}
-              options={AFTER_OPTIONS}
+              options={AFTER_OPTIONS.map((opt) => ({
+                value: opt.value,
+                label: t(opt.label),
+                hint: t(opt.hint)
+              }))}
               onChange={(next) => void update({ afterConvert: next })}
             />
           </Row>
@@ -419,14 +478,11 @@ export function SettingsPage(): React.JSX.Element {
           别的平台上连 reg.exe 都不存在，显示一个必定失败的开关只会制造困惑。 */}
       {window.api.platform === 'win32' && (
         <Section
-          title="系统集成"
-          hint={
-            '两个入口都是「把文件交给转换器，不用先打开应用」，做的是同一件事，可以各开各的。' +
-            '两者都只在当前用户下生效，都不需要管理员。'
-          }
+          title={t('settings.integration.title')}
+          hint={t('settings.integration.hint1') + t('settings.integration.hint2')}
         >
           <div>
-            <Row label="右键菜单">
+            <Row label={t('settings.integration.menu')}>
               <label className="flex items-center gap-2.5 text-[13px] text-fg">
                 <input
                   type="checkbox"
@@ -438,20 +494,19 @@ export function SettingsPage(): React.JSX.Element {
                   className="size-4 shrink-0"
                   style={{ accentColor: 'var(--c-gold)' }}
                 />
-                在资源管理器里加一项「用调律者转换」
+                {t('settings.integration.menu.checkbox')}
               </label>
 
               {/* 这句话**必须留着**：用户看不到菜单时的第一反应是「这个功能是坏的」，
                   而这其实是 Windows 11 的行为——新版右键菜单默认不显示 `*\shell` 动词。
                   就为了绕开它，才有了下面那个「发送到」入口（一级菜单，不用按 Shift+F10）。 */}
               <p className="mt-2 text-[11px] leading-relaxed text-fg-muted">
-                ⚠️ Windows 11 的新版右键菜单默认不显示这一类菜单项，要按 Shift+F10
-                或点「显示更多选项」才看得到——这是系统行为，不是没装成功。
+                {t('settings.integration.menu.win11')}
               </p>
 
               {integration?.error != null && (
                 <p className="mt-2 text-[11px] leading-relaxed text-red-400">
-                  注册表操作失败：{integration.error}
+                  {t('settings.integration.error', { msg: integration.error })}
                 </p>
               )}
 
@@ -462,14 +517,14 @@ export function SettingsPage(): React.JSX.Element {
                 integration?.enabled === true &&
                 !integration.installed && (
                   <p className="mt-2 text-[11px] leading-relaxed text-amber-400">
-                    设置里开着，但注册表里没有这一项。重新开关一次即可补上。
+                    {t('settings.integration.mismatchOn')}
                   </p>
                 )}
               {integration?.error == null &&
                 integration?.enabled === false &&
                 integration.installed && (
                   <p className="mt-2 text-[11px] leading-relaxed text-amber-400">
-                    注册表里还留着这一项（设置里已是关闭）。重新开关一次即可清掉。
+                    {t('settings.integration.mismatchOff')}
                   </p>
                 )}
 
@@ -480,7 +535,7 @@ export function SettingsPage(): React.JSX.Element {
               )}
             </Row>
 
-            <Row label="发送到">
+            <Row label={t('settings.sendTo.label')}>
               <label className="flex items-center gap-2.5 text-[13px] text-fg">
                 <input
                   type="checkbox"
@@ -490,18 +545,16 @@ export function SettingsPage(): React.JSX.Element {
                   className="size-4 shrink-0"
                   style={{ accentColor: 'var(--c-gold)' }}
                 />
-                在「发送到」菜单里加一项
+                {t('settings.sendTo.checkbox')}
               </label>
 
               <p className="mt-2 text-[11px] leading-relaxed text-fg-muted">
-                右键 →「发送到」是一级菜单，比上面那一项少两步，也不用教用户按 Shift+F10。
-                它不写注册表，只在你的「发送到」文件夹里放一个快捷方式，关掉开关或卸载时删掉。
-                多选时会一次把它们全部收进队列，而右键菜单那一项只认得第一个文件。
+                {t('settings.sendTo.note')}
               </p>
 
               {integration?.sendToError != null && (
                 <p className="mt-2 text-[11px] leading-relaxed text-red-400">
-                  快捷方式操作失败：{integration.sendToError}
+                  {t('settings.sendTo.error', { msg: integration.sendToError })}
                 </p>
               )}
 
@@ -510,14 +563,14 @@ export function SettingsPage(): React.JSX.Element {
                 integration?.sendToEnabled === true &&
                 !integration.sendToInstalled && (
                   <p className="mt-2 text-[11px] leading-relaxed text-amber-400">
-                    设置里开着，但那个快捷方式不在。重新开关一次即可补上。
+                    {t('settings.sendTo.mismatchOn')}
                   </p>
                 )}
               {integration?.sendToError == null &&
                 integration?.sendToEnabled === false &&
                 integration?.sendToInstalled === true && (
                   <p className="mt-2 text-[11px] leading-relaxed text-amber-400">
-                    「发送到」里还留着那个快捷方式（设置里已是关闭）。重新开关一次即可清掉。
+                    {t('settings.sendTo.mismatchOff')}
                   </p>
                 )}
 
@@ -537,16 +590,17 @@ export function SettingsPage(): React.JSX.Element {
           平台专有的东西（`fs.watch` 三边都有）。把它藏起来只会让换平台的人
           以为这个功能没了。 */}
       <Section
-        title="重命名即转换"
+        title={t('settings.rename.title')}
         hint={
-          '在下面这些文件夹里，把 a.mkv 改名成 a.mp4，就自动按 mp4 重转一遍——' +
-          '相当于用改名表达「我要这个格式」。只认视频 / 音频 / 图片三类，' +
-          '且源与目标都必须是能力矩阵里真有的组合。' +
-          '⚠️ 源文件不会被删：它会被改回原来的名字原样留着，你随时能反悔。'
+          // ⚠️ 与「转换完成之后」那一节同一条口径：四段分开取词后拼接，逐字节相同。
+          t('settings.rename.hint1') +
+          t('settings.rename.hint2') +
+          t('settings.rename.hint3') +
+          t('settings.rename.hint4')
         }
       >
         <div>
-          <Row label="开关">
+          <Row label={t('settings.rename.label')}>
             <label className="flex items-center gap-2.5 text-[13px] text-fg">
               <input
                 type="checkbox"
@@ -556,23 +610,23 @@ export function SettingsPage(): React.JSX.Element {
                 className="size-4 shrink-0"
                 style={{ accentColor: 'var(--c-gold)' }}
               />
-              在下面的文件夹里，改扩展名就等于要求转换
+              {t('settings.rename.checkbox')}
             </label>
             <p className="mt-2 text-[11px] leading-relaxed text-fg-muted">
-              默认关闭。关着的时候我们不装任何目录监听，对你的磁盘完全无感。
+              {t('settings.rename.note')}
             </p>
             {/* 开关开着、目录却是空的，是一个看起来「已经开了」但什么都不发生的状态。
                 这跟右键菜单那两条警告是同一类问题：意图与实际分叉了，界面必须说出来。 */}
             {settings?.renameConvert === true && settings.renameConvertDirs.length === 0 && (
               <p className="mt-2 text-[11px] leading-relaxed text-amber-400">
-                开关是打开的，但一个文件夹都没选——现在还什么都不会发生。请在下面加一个。
+                {t('settings.rename.noDirs')}
               </p>
             )}
           </Row>
 
-          <Row label="文件夹">
+          <Row label={t('settings.rename.dirs')}>
             {settings === null ? null : settings.renameConvertDirs.length === 0 ? (
-              <p className="text-[13px] text-fg-muted">还没有选择文件夹</p>
+              <p className="text-[13px] text-fg-muted">{t('settings.rename.dirs.empty')}</p>
             ) : (
               <ul className="space-y-1.5">
                 {/* key 用路径本身：同一个目录不会出现两次（主进程那边已经去重） */}
@@ -586,7 +640,7 @@ export function SettingsPage(): React.JSX.Element {
                       onClick={() => void removeRenameDir(dir)}
                       className="btn-secondary shrink-0"
                     >
-                      移除
+                      {t('settings.rename.remove')}
                     </button>
                   </li>
                 ))}
@@ -599,11 +653,10 @@ export function SettingsPage(): React.JSX.Element {
               onClick={() => void pickRenameDir()}
               className="btn-secondary mt-3 disabled:opacity-50"
             >
-              添加文件夹…
+              {t('settings.rename.addDir')}
             </button>
             <p className="mt-2 text-[11px] leading-relaxed text-fg-muted">
-              只监听这一层，不递归子文件夹。删除一个文件夹条目只是不再监听它，
-              不会碰里面的任何文件。
+              {t('settings.rename.watchNote')}
             </p>
           </Row>
         </div>
@@ -614,10 +667,7 @@ export function SettingsPage(): React.JSX.Element {
           页脚那一行已经有「一切转换，尽在本机之中」与「运行中 N / 上限 M」，
           再塞三条会把它挤成一团，而且工作台上真正需要的是**按钮上的 title**，
           那个已经加了。 */}
-      <Section
-        title="快捷键"
-        hint="只在工作台生效。焦点在输入框里时 Enter 归输入框——用拼音选词的那一下回车不会启动队列。"
-      >
+      <Section title={t('settings.shortcuts.title')} hint={t('settings.shortcuts.hint')}>
         <div className="rounded border border-line">
           {SHORTCUT_TABLE.map((item) => (
             <Row
@@ -628,7 +678,7 @@ export function SettingsPage(): React.JSX.Element {
                 </kbd>
               }
             >
-              <span className="text-[13px] text-fg-muted">{SHORTCUT_HELP[item.action]}</span>
+              <span className="text-[13px] text-fg-muted">{t(SHORTCUT_HELP[item.action])}</span>
             </Row>
           ))}
         </div>

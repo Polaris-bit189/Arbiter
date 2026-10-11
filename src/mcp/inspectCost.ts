@@ -180,6 +180,9 @@ async function readManifestSizes(): Promise<Map<string, EngineManifestSize>> {
   const text = await readFile(manifestPath(), 'utf8')
   const parsed: unknown = JSON.parse(text)
   const engines = (parsed as { engines?: unknown } | null)?.engines
+  // ⚠️ 这一句**故意不进字典**（C 类，约束 43）：它抛出的异常在下面
+  // `inspectCost()` 里被 `catch { size = undefined }` **吞掉**——既到不了 agent，
+  // 也进不了任何日志。它是给写坏清单的人看的内部断言，不是文案。
   if (!Array.isArray(engines)) throw new Error('引擎清单里没有 engines 数组')
 
   const out = new Map<string, EngineManifestSize>()

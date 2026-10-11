@@ -1,5 +1,6 @@
 import { existsSync } from 'fs'
 import { ipcMain, shell } from 'electron'
+import { t } from '@shared/i18n'
 import { CH, historyRerunSchema, idPayloadSchema } from '@shared/ipc-contract'
 import type { RerunResult } from '@shared/ipc-contract'
 import type { HistoryEntry } from '@shared/types'
@@ -70,7 +71,7 @@ export function registerHistoryIpc(): void {
     if (!parsed.success) {
       return {
         added: 0,
-        rejected: [{ path: String(raw), reason: '参数非法' }],
+        rejected: [{ path: String(raw), reason: t('ipc.reject.badPayload') }],
         conflicts: [],
         policyChanged: false
       }
@@ -83,7 +84,7 @@ export function registerHistoryIpc(): void {
     for (const id of parsed.data.ids) {
       const entry = getHistory(id)
       if (entry === null) {
-        rejected.push({ path: id, reason: '这条痕迹已不在记录中' })
+        rejected.push({ path: id, reason: t('ipc.reject.entryGone') })
         continue
       }
       entries.push(entry)

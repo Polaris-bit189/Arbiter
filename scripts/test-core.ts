@@ -9,9 +9,12 @@
  * 图标素材的 symbol id 映射（renderer/src/lib/icons.ts）、以及 IPC 契约里
  * 那个被 zod 4 改了语义的 `defaultTargets`（shared/ipc-contract.ts）。
  *
- * 后三块都靠**相对路径** import：`npm run test:core` 没带 `--tsconfig`，
- * `@shared/*` 那个别名在默认的 tsconfig.json（只有一个 references 列表）里不存在，
- * 用别名会直接 Cannot find module。这也是唯一一处 test-core 与别的测试脚本不同之处。
+ * ⚠️ **P4 起这支套件也带 `--tsconfig` 了**（与其余二十来支一致），所以
+ * `@shared/*` 别名在这里是通的。在那之前它是**唯一**一支裸 `tsx` 的套件，
+ * 于是「往 `src/main/**` 加一个 `@shared/*` 的**值**导入」会让它当场
+ * `Cannot find module`——而这件事栽过两次：P0-10 的 `engines/ffmpeg.ts`（当时就地
+ * 写了两个常量绕过）与 P4 的 `core/jsonStore.ts`（这次改成了正规修法）。
+ * 那支套件里剩下的相对路径 import 仍然是对的写法，只是**不再是被迫的了**。
  */
 import { spawn } from 'child_process'
 import { existsSync, readdirSync, readFileSync } from 'fs'
@@ -35,6 +38,7 @@ import { EngineWatchdog } from '../src/main/converters/common'
 import {
   filterActionSchema,
   outputSchema,
+  qualitySchema,
   resizeActionSchema,
   settingsPatchSchema,
   settingsSchema,
@@ -47,17 +51,31 @@ import {
   canFilter,
   canOutputSize,
   canUseAction,
+  canUseQuality,
   describeAction,
   describeFilters,
   describeOptions,
+  describeQuality,
+  DEFAULT_CRF,
+  DEFAULT_PRESET,
   hasAnyOptions,
   MAX_BITRATE_KBPS,
+  MAX_CRF,
   MAX_FILTER_ACTIONS,
   MAX_IMAGE_DIM,
   MAX_TARGET_BYTES,
+  MIN_CRF,
+  supportsQuality,
   withOption
 } from '../src/shared/options'
-import { IMAGE_FITS, TRIM_MODES, type FilterAction } from '../src/shared/types'
+import {
+  ENCODE_PRESETS,
+  ENCODE_TUNES,
+  IMAGE_FITS,
+  TRIM_MODES,
+  type FilterAction,
+  type QualityOptions
+} from '../src/shared/types'
 import { spriteIdFor, tileForExt, TILE_EXTS } from '../src/renderer/src/lib/icons'
 
 const FFMPEG = resolve('node_modules/ffmpeg-static/ffmpeg.exe')
@@ -1127,6 +1145,131 @@ function testTrimContract(): void {
     !outputSchema.safeParse({ targetBytes: 1024 * 1024, extra: 1 }).success
   )
 
+  /* ---- 编码质量档（P0-10 的契约面）---- */
+
+  check(
+    '契约：质量档三个字段各自可省、都能单独收下',
+    qualitySchema.safeParse({ crf: 18 }).success &&
+      qualitySchema.safeParse({ preset: 'slow' }).success &&
+      qualitySchema.safeParse({ tune: 'film' }).success
+  )
+  check(
+    '契约：质量档三项全给也通过',
+    qualitySchema.safeParse({ crf: 18, preset: 'slow', tune: 'grain' }).success
+  )
+  // 空对象与「没有质量档」在引擎那一侧行为相同，但它在 TaskOptions 里**占着一个键**：
+  // 卡片上会多一句「编码档（未指定）」、历史页会把这条记成「用过编码档」。
+  check('契约：空对象被拒（它会让同一条任务有两种表示）', !qualitySchema.safeParse({}).success)
+  check(
+    '契约：CRF 边界本身通过（0 = 无损、51 = 最差，两端都是合法值）',
+    qualitySchema.safeParse({ crf: MIN_CRF }).success &&
+      qualitySchema.safeParse({ crf: MAX_CRF }).success
+  )
+  check(
+    '契约：CRF 越界被拒',
+    !qualitySchema.safeParse({ crf: MIN_CRF - 1 }).success &&
+      !qualitySchema.safeParse({ crf: MAX_CRF + 1 }).success
+  )
+  // 小数会原样进 `-crf`，ffmpeg 四舍五入——用户填的与他得到的对不上，而没有任何地方报错。
+  check('契约：小数 CRF 被拒', !qualitySchema.safeParse({ crf: 18.5 }).success)
+  check(
+    '契约：NaN / Infinity 的 CRF 被拒（进了命令行是字面量，ffmpeg 会当文件名解析）',
+    !qualitySchema.safeParse({ crf: Number.NaN }).success &&
+      !qualitySchema.safeParse({ crf: Number.POSITIVE_INFINITY }).success
+  )
+  check(
+    '契约：未知的 preset / tune 被拒（枚举是从常量数组派生的，不该有漏网值）',
+    !qualitySchema.safeParse({ preset: 'insane' }).success &&
+      !qualitySchema.safeParse({ tune: 'psnr' }).success
+  )
+  check(
+    '契约：ENCODE_PRESETS / ENCODE_TUNES 里每一档都真的被 schema 收下（两个常量不许漂移）',
+    ENCODE_PRESETS.every((p) => qualitySchema.safeParse({ preset: p }).success) &&
+      ENCODE_TUNES.every((t) => qualitySchema.safeParse({ tune: t }).success),
+    `${ENCODE_PRESETS.length} 档预设 / ${ENCODE_TUNES.length} 档调优`
+  )
+  check('契约：质量档多给一个字段被拒', !qualitySchema.safeParse({ crf: 18, extra: 1 }).success)
+  check(
+    '契约：setOptions 载荷收 { id, options: { quality } }',
+    setOptionsSchema.safeParse({ id: setId, options: { quality: { crf: 18 } } }).success
+  )
+  // ⚠️ 这一条是这批参数里最承重的一条：`-crf` 与 `-b:v` 同时给时 x264 会回到质量模式、
+  // 把体积目标变成一句空话，**而任务报成功**。两个界面都靠这条拒。
+  check(
+    '契约：质量档与输出约束互斥——同时给被拒',
+    !setOptionsSchema.safeParse({
+      id: setId,
+      options: { quality: { crf: 18 }, output: { targetBytes: 10 * 1024 * 1024 } }
+    }).success
+  )
+  check(
+    '契约：质量档与输出约束各自单独给仍然通过（互斥不等于一律拒）',
+    setOptionsSchema.safeParse({
+      id: setId,
+      options: { quality: { crf: 18 }, trim: { start: 1, end: 2, mode: 'exact' } }
+    }).success
+  )
+
+  /* ---- 出口判据：哪些出口认这套旋钮 ---- */
+
+  check(
+    '判据：走 libx264 的视频出口都认（含 m4v——它不在能力矩阵里，但在视频格式表里）',
+    ['mp4', 'mkv', 'mov', 'm4v', 'avi'].every((t) => supportsQuality(t))
+  )
+  check(
+    '判据：webm / gif 不认（前者走 VP9 的 CRF 是另一条尺子，后者走调色板滤镜）',
+    !supportsQuality('webm') && !supportsQuality('gif')
+  )
+  check(
+    '判据：大小写不敏感（界面上的扩展名统一小写，但别赌这件事）',
+    supportsQuality('MP4') && !supportsQuality('WEBM')
+  )
+  check(
+    '判据：非视频类别一律不认',
+    !supportsQuality('mp3') && !supportsQuality('png') && !supportsQuality('pdf')
+  )
+  // ⚠️ 漂移守卫：能力矩阵里 `mp4 → xxx` 能选到的每一个视频出口，要么认质量档、
+  // 要么在下面这份**显式**的豁免名单里。将来往矩阵里加一个新视频出口时，
+  // 忘了改 `supportsQuality` 的话这条会红——否则那种缺失没人会想到去查。
+  const qualityExempt = new Set(['webm', 'gif'])
+  const videoExits = targetsFor('mp4').filter((t) => categoryOf(t) === 'video')
+  check(
+    '判据：能力矩阵里的视频出口与 supportsQuality 不漂移',
+    videoExits.length > 0 && videoExits.every((t) => qualityExempt.has(t) || supportsQuality(t)),
+    videoExits.join(',')
+  )
+
+  /* ---- 文案 ---- */
+
+  check(
+    '摘要：质量档三种组合各自的写法',
+    describeQuality({ crf: 18 }) === 'CRF 18' &&
+      describeQuality({ preset: 'slow' }) === '预设 slow' &&
+      describeQuality({ tune: 'grain' }) === '调优 grain',
+    describeQuality({ crf: 18, preset: 'slow', tune: 'grain' })
+  )
+  check(
+    '摘要：三项一起时按 crf → preset → tune 拼（与 TaskOptions 的声明顺序一致）',
+    describeQuality({ crf: 18, preset: 'slow', tune: 'grain' }) ===
+      'CRF 18 · 预设 slow · 调优 grain'
+  )
+  check(
+    '摘要：质量档排在输出约束之后（describeOptions 的顺序是字段声明顺序）',
+    describeOptions({
+      trim: { start: 1, end: 3, mode: 'exact' },
+      quality: { crf: 18 },
+      filters: []
+    }) === '裁 1.0s–3.0s · 精确 · CRF 18',
+    describeOptions({ trim: { start: 1, end: 3, mode: 'exact' }, quality: { crf: 18 } }) ?? ''
+  )
+  check(
+    '判据：canUseQuality 只对视频为真，且 hasAnyOptions 认它',
+    canUseQuality('video') &&
+      !canUseQuality('audio') &&
+      !canUseQuality('image') &&
+      hasAnyOptions('video')
+  )
+
   /* ---- 处理链：判别式联合与逐动作校验 ---- */
 
   const goodResize = {
@@ -2078,6 +2221,141 @@ function testRecipe(): void {
   )
 }
 
+/**
+ * 编码质量档落成 ffmpeg 参数的样子。
+ *
+ * 这一节**不跑引擎**，判的是数组本身——`.part` 与并发那些行为在 `test-tasks.ts` 里。
+ * 拆开的理由是这一层有一条最贵的回归：**省略质量档时必须与加这个参数之前逐字相同**。
+ * 那是「没设过质量档的用户，产物一个字节都不该变」的全部保证，而它一旦破了，
+ * 症状是**所有人的产物悄悄变了**——没有任何断言会自己发现这件事。
+ */
+function testQualityArgs(): void {
+  console.log('\n[10] 编码质量档的参数构造')
+
+  const build = (to: string, quality?: QualityOptions): string[] =>
+    buildFfmpegArgs('D:\\in\\clip.mp4', `D:\\out\\clip.${to}`, 'mp4', to, { quality })
+
+  /** 某个选项后面跟着的值；选项不存在时返回 `null`（而不是空串——空串分不出「没有」） */
+  const valueOf = (args: string[], flag: string): string | null => {
+    const at = args.indexOf(flag)
+    return at < 0 ? null : (args[at + 1] ?? null)
+  }
+
+  // ★ 回归守卫：省略质量档 = 加这个参数之前的行为。
+  // 否证：把 `x264Args` 里的 `DEFAULT_CRF` 改个数 / 把 `-preset` 去掉 → 这一条翻红。
+  const plain = build('mp4')
+  check(
+    '省略质量档时参数与加这个参数之前逐字相同（-c:v libx264 -preset veryfast -crf 23）',
+    valueOf(plain, '-c:v') === 'libx264' &&
+      valueOf(plain, '-preset') === 'veryfast' &&
+      valueOf(plain, '-crf') === '23' &&
+      !plain.includes('-tune'),
+    plain.join(' ')
+  )
+  // ★ **两份默认值不许漂**。`engines/ffmpeg.ts` 里那两个字面量与 `@shared/options`
+  // 的同名常量是同一个事实的两份副本（前者不能 import 后者：本套件跑的是不带
+  // `--tsconfig` 的裸 tsx，解析不了 `@shared/*`，理由写在引擎那一侧）。
+  // 这一条就是那份「两份必须同时改」的守卫——没有它，改了一边没人会知道。
+  check(
+    '⭐ 引擎里的默认值 = @shared/options 的 DEFAULT_CRF / DEFAULT_PRESET',
+    valueOf(plain, '-crf') === String(DEFAULT_CRF) && valueOf(plain, '-preset') === DEFAULT_PRESET,
+    `引擎 ${valueOf(plain, '-preset')}/${valueOf(plain, '-crf')} · shared ${DEFAULT_PRESET}/${DEFAULT_CRF}`
+  )
+
+  const crfOnly = build('mp4', { crf: 18 })
+  check(
+    '只给 CRF：只有 -crf 变，预设仍是默认',
+    valueOf(crfOnly, '-crf') === '18' && valueOf(crfOnly, '-preset') === 'veryfast'
+  )
+  check(
+    '只给 CRF：CRF 为 0 时也要真的写在命令行上（别被 `?? 默认值` 当成缺省吃掉）',
+    valueOf(build('mp4', { crf: 0 }), '-crf') === '0'
+  )
+
+  const presetOnly = build('mp4', { preset: 'slow' })
+  check(
+    '只给预设：只有 -preset 变',
+    valueOf(presetOnly, '-preset') === 'slow' && valueOf(presetOnly, '-crf') === '23'
+  )
+  check(
+    '调优：给了才出现 -tune，没给时那一对参数一个都不在',
+    valueOf(build('mp4', { tune: 'film' }), '-tune') === 'film' && !plain.includes('-tune')
+  )
+  check(
+    '三项一起给时都落在命令行上',
+    (() => {
+      const a = build('mp4', { crf: 20, preset: 'medium', tune: 'grain' })
+      return (
+        valueOf(a, '-crf') === '20' &&
+        valueOf(a, '-preset') === 'medium' &&
+        valueOf(a, '-tune') === 'grain'
+      )
+    })()
+  )
+  // ⚠️ 这条是「每个出口都接上了」的守卫，不是废话：`x264Args` 只挂在 `videoArgs` 的
+  // default 与 avi 两格上，而视频出口有四个。少接一格的表现是那个出口静默忽略质量档。
+  check(
+    '每一个认质量档的视频出口都真的把三项写进了参数',
+    ['mp4', 'mkv', 'mov', 'm4v', 'avi'].every((to) => {
+      const a = build(to, { crf: 20, preset: 'medium', tune: 'grain' })
+      return valueOf(a, '-crf') === '20' && valueOf(a, '-preset') === 'medium'
+    })
+  )
+  // 反方向：webm 那一格**故意**看不见 quality（vp9 的 CRF 是另一条尺子）。
+  // 拦它的是上游的 `supportsQuality()`，这里断的是「这一格确实没接」——
+  // 接了才是错的：`-tune film` 会被 libvpx 静默忽略、`-preset` 根本没有这个选项。
+  check(
+    'webm 那一格刻意不接质量档（拦它的是 supportsQuality，不是这一层）',
+    valueOf(build('webm', { crf: 18, preset: 'slow' }), '-crf') === '32'
+  )
+  // ---- 接线：`costOf` 必须把 task.options 传下去 ----
+  //
+  // 这是**结构性**判据（读源码），与 [12] 那几条「引擎接上了看门狗」同一种东西。
+  // 为什么不做成行为判据：那要真排一批 veryslow 的大文件、量并发峰值，几十秒起步，
+  // 而这里问的只是一句「那一行有没有写」。
+  //
+  // ⚠️ 少了它，`costOf` 忘记传 `task.options` 时**没有任何症状**：整本并发账按快档记，
+  // 队列只是悄悄多放几条重编码进去，内存那堵墙迟早撞上，但没有任何地方会报错。
+  const taskSrc = readFileSync(resolve('src/main/core/task.ts'), 'utf8')
+  check(
+    '接线：TaskManager.costOf 把 task.options 传给了 taskCost（漏了它整本账按快档记）',
+    /taskCost\(\s*task\.engine\s*,\s*this\.inputBytes\.get\(task\.id\)\s*,\s*task\.options\s*\)/.test(
+      taskSrc
+    )
+  )
+  // 同理：`setOptions` 改完参数要换掉队列条目。慢预设改变了「占几份」，
+  // 少了这一步那条排队中的任务在**别的任务眼里**还是轻的。
+  //
+  // 判据写成「那一句**恰好出现两次**」而不是「出现过」：`setTarget` 里本来就有一句
+  // 一模一样的（换引擎桶），所以「出现过」在 `setOptions` 漏掉时照样绿。
+  // 两份的措辞与缩进逐字相同，所以直接数出现次数是最稳的写法。
+  const queueSwap = taskSrc.match(
+    /if \(this\.queue\.remove\(id\)\) this\.queue\.push\(\{ id, engine: task\.engine, cost: this\.costOf\(task\) \}\)/g
+  )
+  check(
+    '接线：队列条目在 setTarget **与** setOptions 两处都换掉（慢预设改变占几份）',
+    queueSwap?.length === 2,
+    `出现 ${queueSwap?.length ?? 0} 次`
+  )
+
+  // 质量档与码率目标互斥：上游已经拦过，这里再抛一次。静默挑一个的后果是
+  // 「x264 回到质量模式、把 -b:v 只当上限」——产物体积与目标脱钩而任务报成功。
+  check(
+    '⭐ 质量档与码率目标同时给时抛错（不静默挑一个）',
+    (() => {
+      try {
+        buildFfmpegArgs('D:\\in\\clip.mp4', 'D:\\out\\clip.mp4', 'mp4', 'mp4', {
+          quality: { crf: 18 },
+          target: { videoKbps: 2000 }
+        })
+        return false
+      } catch {
+        return true
+      }
+    })()
+  )
+}
+
 async function main(): Promise<void> {
   console.log('=== 核心逻辑自测 ===')
   testSanitize()
@@ -2088,6 +2366,7 @@ async function main(): Promise<void> {
   testSettingsContract()
   testOfficeFamilies()
   testTrimContract()
+  testQualityArgs()
   await testRealConversion()
   await testImageTargetExclusions()
   await testEngineWatchdog()

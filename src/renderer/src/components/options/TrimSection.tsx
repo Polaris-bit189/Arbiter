@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { t } from '@shared/i18n'
 import { TRIM_MODES, type Task, type TrimMode, type TrimOptions } from '@shared/types'
 import { MAX_TRIM_SEC } from '@shared/trim'
 import { withOption } from '@shared/options'
@@ -48,15 +49,15 @@ export function TrimSection({ task }: { task: Task }): React.JSX.Element {
   const reason: string | null = ((): string | null => {
     const rawStart = start.trim()
     const rawEnd = end.trim()
-    if (rawStart === '' || rawEnd === '') return '起点与终点都要填'
+    if (rawStart === '' || rawEnd === '') return t('options.trim.reasonBothRequired')
 
     const parsedStart = Number(rawStart)
     const parsedEnd = Number(rawEnd)
     if (!Number.isFinite(parsedStart) || !Number.isFinite(parsedEnd))
-      return '只能填数字（单位是秒）'
-    if (parsedStart < 0 || parsedEnd < 0) return '时间不能是负数'
-    if (parsedEnd <= parsedStart) return '终点必须大于起点'
-    if (parsedEnd > MAX_TRIM_SEC) return `终点不能超过 ${MAX_TRIM_SEC} 秒（24 小时）`
+      return t('options.trim.reasonNotNumber')
+    if (parsedStart < 0 || parsedEnd < 0) return t('options.trim.reasonNegative')
+    if (parsedEnd <= parsedStart) return t('options.trim.reasonOrder')
+    if (parsedEnd > MAX_TRIM_SEC) return t('options.trim.reasonTooLong', { max: MAX_TRIM_SEC })
     return null
   })()
 
@@ -86,9 +87,9 @@ export function TrimSection({ task }: { task: Task }): React.JSX.Element {
 
   return (
     <OptionsSection
-      title="裁剪区间（秒）"
+      title={t('options.trim.title')}
       reason={reason}
-      failedText={failed ? '没能设上——这条任务不接受裁剪参数' : ''}
+      failedText={failed ? t('options.trim.failed') : ''}
       busy={busy}
       canClear={current !== undefined}
       onApply={() => void apply()}
@@ -99,20 +100,20 @@ export function TrimSection({ task }: { task: Task }): React.JSX.Element {
           type="text"
           inputMode="decimal"
           value={start}
-          aria-label="起点（秒）"
+          aria-label={t('options.trim.startAria')}
           onChange={(e) => setStart(e.target.value)}
           className="w-24 rounded border border-line bg-canvas px-2 py-1 font-mono text-xs text-fg outline-none focus:border-gold-dim"
         />
-        <span className="text-xs text-fg-faint">起</span>
+        <span className="text-xs text-fg-faint">{t('options.trim.startShort')}</span>
         <input
           type="text"
           inputMode="decimal"
           value={end}
-          aria-label="终点（秒）"
+          aria-label={t('options.trim.endAria')}
           onChange={(e) => setEnd(e.target.value)}
           className="w-24 rounded border border-line bg-canvas px-2 py-1 font-mono text-xs text-fg outline-none focus:border-gold-dim"
         />
-        <span className="text-xs text-fg-faint">止</span>
+        <span className="text-xs text-fg-faint">{t('options.trim.endShort')}</span>
       </div>
 
       <div className="mt-2 flex items-center gap-1.5">
@@ -128,7 +129,7 @@ export function TrimSection({ task }: { task: Task }): React.JSX.Element {
                 : 'border-line text-fg-muted hover:border-line-2 hover:text-fg'
             )}
           >
-            {key === 'lossless' ? '无损（不重编码）' : '精确（重新编码）'}
+            {key === 'lossless' ? t('options.trim.modeLossless') : t('options.trim.modeExact')}
           </button>
         ))}
       </div>
@@ -138,14 +139,12 @@ export function TrimSection({ task }: { task: Task }): React.JSX.Element {
       <p className="mt-2 text-[11px] leading-relaxed text-fg-faint">
         {mode === 'lossless' ? (
           <>
-            无损裁剪一个字节都不重编，所以它只能在关键帧上落刀：起点会对齐到最近的关键帧，
-            <span className="text-gold-pale">可能比你要的早一点</span>
-            （最多早一个关键帧间隔），终点不受影响。另外它要求源里的编解码器能原样装进目标
-            容器（比如 h264 就进不了 webm），装不下时任务会失败并让你改用精确模式——
-            不会背着你偷偷重编一遍。
+            {t('options.trim.losslessLead')}
+            <span className="text-gold-pale">{t('options.trim.losslessEarly')}</span>
+            {t('options.trim.losslessRest')}
           </>
         ) : (
-          <>精确裁剪会重新编码（H.264 + AAC），帧级准确，画质会有一次损失，耗时也长得多。</>
+          <>{t('options.trim.exactHint')}</>
         )}
       </p>
     </OptionsSection>

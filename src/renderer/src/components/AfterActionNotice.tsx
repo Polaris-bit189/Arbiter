@@ -1,3 +1,4 @@
+import { t, type KeysOf } from '@shared/i18n'
 import type { AfterConvertAction } from '@shared/types'
 import { Icon } from './Icon'
 import { useAfterAction } from '../store/useAfterAction'
@@ -20,11 +21,18 @@ import { useAfterAction } from '../store/useAfterAction'
  *  - 失败（产物已不在原处 / 没注入出口）：说清是什么没成
  */
 
-const DONE_LABEL: Record<AfterConvertAction, string> = {
-  none: '什么也没做',
-  'copy-path': '已复制路径',
-  'copy-file': '已复制这个文件',
-  'open-folder': '已在文件夹中显示'
+/**
+ * 存的是**键**：`KeysOf` 让「加了一档却忘了配句子」变成编译错误，取值处再 `t(...)`。
+ *
+ * ⚠️ 前缀必须是 `shell.after.label.` 这一层**窄**的：写成 `KeysOf<'shell.after.'>`
+ * 会把 `shell.after.done`（带 `{label}`/`{name}`）一起收进来，于是 `t(...)` 那处
+ * 变成「必须传两个参数」的假编译错误（见 `types.ts` 里 `KeysOf` 那段说明）。
+ */
+const DONE_LABEL: Record<AfterConvertAction, KeysOf<'shell.after.label.'>> = {
+  none: 'shell.after.label.none',
+  'copy-path': 'shell.after.label.copyPath',
+  'copy-file': 'shell.after.label.copyFile',
+  'open-folder': 'shell.after.label.openFolder'
 }
 
 export function AfterActionNotice(): React.JSX.Element | null {
@@ -36,7 +44,7 @@ export function AfterActionNotice(): React.JSX.Element | null {
 
   if (result === null) return null
 
-  const name = result.name ?? '产物'
+  const name = result.name ?? t('shell.after.artifact')
   // 「再复制一次」只对写剪贴板的那两档有意义：打开目录是幂等的，重来一次没有意义
   const canRedo =
     lastId !== null && (result.action === 'copy-path' || result.action === 'copy-file')
@@ -51,8 +59,10 @@ export function AfterActionNotice(): React.JSX.Element | null {
         />
         <span className="min-w-0 flex-1 truncate text-xs text-gold-pale" title={result.path ?? ''}>
           {result.ok
-            ? `${DONE_LABEL[result.action]}：${name}`
-            : `未能完成：${result.error ?? '原因不明'}`}
+            ? t('shell.after.done', { label: t(DONE_LABEL[result.action]), name })
+            : t('shell.after.failed', {
+                reason: result.error ?? t('shell.after.unknownReason')
+              })}
         </span>
 
         {canRedo && (
@@ -62,14 +72,14 @@ export function AfterActionNotice(): React.JSX.Element | null {
             onClick={() => void run(lastId)}
             className="shrink-0 rounded px-1.5 py-0.5 text-[12px] text-fg-muted transition-colors hover:bg-hover hover:text-gold-pale disabled:opacity-45"
           >
-            再复制一次
+            {t('shell.after.copyAgain')}
           </button>
         )}
 
         <button
           type="button"
           onClick={dismiss}
-          aria-label="收起"
+          aria-label={t('shell.after.dismiss')}
           className="shrink-0 rounded p-0.5 text-fg-faint transition-colors hover:bg-hover hover:text-fg"
         >
           <Icon name="close" size={13} />
@@ -85,7 +95,7 @@ export function AfterActionNotice(): React.JSX.Element | null {
         // 而真正的原因通常是剪贴板被别的程序接管了——把这句话摆在这儿，
         // 归因成本就从「查不出原因」降到「再点一次」。
         <p className="mt-1 text-[11px] leading-relaxed text-fg-muted">
-          剪贴板随时可能被别的程序接管。粘出来若不对，点「再复制一次」。
+          {t('shell.after.clipboardHint')}
         </p>
       )}
     </div>

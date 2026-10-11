@@ -31,6 +31,7 @@ const JOBS = resolve('src/mcp/jobs.ts')
 const PLAN = resolve('src/mcp/plan.ts')
 const SETTINGS = resolve('src/main/core/settings.ts')
 const THUMBNAIL = resolve('src/mcp/thumbnail.ts')
+const SCHEMA = resolve('src/mcp/schema.ts')
 
 const MUTATIONS = [
   {
@@ -154,13 +155,13 @@ const MUTATIONS = [
           '        // 它能立刻看出「我用错 id 了」而不是「任务丢了」。',
           '        return fail(',
           '          new McpToolError(',
-          '            `没有这个 job：${args.job_id}`,',
+          "            t('mcp.server.unknownJob', { id: args.job_id }),",
           '            { known_job_ids: deps.registry.list().map((j) => j.id) },',
           "            { code: 'unknown_job' }",
           '          )',
           '        )'
         ].join('\n'),
-        to: '        return fail(new McpToolError(`没有这个 job：${args.job_id}`))'
+        to: "        return fail(new McpToolError(t('mcp.server.unknownJob', { id: args.job_id })))"
       }
     ],
     expect: [
@@ -208,8 +209,13 @@ const MUTATIONS = [
     file: SERVER,
     edits: [
       {
-        from: '  server.registerTool(name, { ...config, description: TOOL_DESCRIPTIONS[name] }, handler)\n',
-        to: '  server.registerTool(\n    name,\n    { ...config, description: TOOL_DESCRIPTIONS.read_document },\n    handler\n  )\n'
+        // ⚠️ 锚点跟着 `registerArbiterTool` 的形状走（2026-09-26）：它从单行
+        //    `registerTool(name, { ...config, description: … }, handler)` 改成了显式
+        //    列字段的多行块（因为 `annotations` 也改成派生了，不能整个 spread `config`）。
+        //    旧锚点当场命中 0 次——`npm run test:anchors` 五秒就报出来了。
+        //    **改这一层就必须回来改这里**，否则这条变异的结论无效。
+        from: '      description: TOOL_DESCRIPTIONS[name]\n',
+        to: '      description: TOOL_DESCRIPTIONS.read_document\n'
       }
     ],
     expect: [
@@ -400,6 +406,36 @@ const MUTATIONS = [
       }
     ],
     expect: ['11h clampPriority：越界夹到 ±100，并且取整']
+  },
+  {
+    // 把「会写盘的工具」重新标成只读——也就是 2026-09-26 修掉的那个真 bug 本身。
+    // `convert_file` 的 handler 里走的是 `resolveWritePath`，产物要落到用户的盘上；
+    // 标成 `readOnlyHint: true` 等于告诉客户端「可以自动放行、不必逐次确认」。
+    //
+    // 抓它的是 `test-mcp-view.ts` 的 A2 节（**这也是把那一支拉进本脚本的原因**）：
+    // 分类表在 `schema.ts` 里，只有 view 那支读得到它。
+    name: 'convert_file 的等级改回 read（会写盘却自称只读）',
+    file: SCHEMA,
+    edits: [{ from: "  convert_file: 'add',", to: "  convert_file: 'read'," }],
+    expect: [
+      '非只读工具恰好是这三个：batch_convert / cancel_job / convert_file',
+      "convert_file 是 'add' 不是 'read'（它往用户盘上写产物——这里曾经标错，见上面的注释）"
+    ]
+  },
+  {
+    // 接线那一侧：把 `server.ts` 里那句派生改回**手写常量**（正是出 bug 之前的形状）。
+    // 分类表没被动过，所以 view 那一支**照样全绿**——只有真问一次 `tools/list`、
+    // 看发出去的到底是什么，才抓得住。**这条与上一条是配套的**：
+    // 一个管「表对不对」，一个管「表有没有真的生效」。
+    name: 'server.ts 不按表派生 annotations，改回手写 readOnly',
+    file: SERVER,
+    edits: [
+      {
+        from: '      annotations: ACCESS_HINTS[TOOL_ACCESS[name]],',
+        to: '      annotations: { readOnlyHint: true, idempotentHint: true },'
+      }
+    ],
+    expect: ['3b 会写盘的工具不自称只读（convert_file / batch_convert / cancel_job）']
   }
 ]
 
@@ -460,20 +496,37 @@ function parseReds(text) {
     )
 }
 
-/** 跑被测套件。通过/失败的分隔符是 `通过 44 / 失败 0`（斜杠）。 */
+/**
+ * 被测套件。通过/失败的分隔符是 `通过 44 / 失败 0`（斜杠）。
+ *
+ * ⚠️ **两支一起跑**（2026-09-26 才加的第二支）。在那之前只有 `test-mcp-server.ts`，
+ * 于是 `test-mcp-view.ts` 那 190 多条断言**一次反证都没被跑过**——它们全都只是
+ * 「看起来在测」。加它的直接起因是工具的 `annotations`：来源是一张分类表
+ * （`schema.ts` 的 `TOOL_ACCESS`），而那张表**只有 view 这一支看得到**。
+ *
+ * 两边的格式对得上（`✗ <label>  ← <detail>` 与 `通过 N / 失败 M`），所以红名单取并集、
+ * 计数求和。**但必须要求两支都打出了汇总行**：少一支而另一支照常收尾的话，
+ * 「某一支整个崩了」会伪装成一份干净的全绿——那正是本仓库最防的那种假象。
+ */
+const SUITES = ['scripts/test-mcp-server.ts', 'scripts/test-mcp-view.ts']
+
 function runTests() {
-  const out = spawnSync(
-    'npx',
-    ['tsx', '--tsconfig', 'tsconfig.test.json', 'scripts/test-mcp-server.ts'],
-    { encoding: 'utf8', shell: true, maxBuffer: 32 * 1024 * 1024 }
+  const text = SUITES.map((suite) =>
+    spawnSync('npx', ['tsx', '--tsconfig', 'tsconfig.test.json', suite], {
+      encoding: 'utf8',
+      shell: true,
+      maxBuffer: 32 * 1024 * 1024
+    })
   )
-  const text = out.stdout + out.stderr
-  const reds = parseReds(text)
-  const total = /通过 (\d+) \/ 失败 (\d+)/.exec(text)
+    .map((out) => out.stdout + out.stderr)
+    .join('\n')
+  const reds = [...new Set(parseReds(text))]
+  const totals = [...text.matchAll(/通过 (\d+) \/ 失败 (\d+)/g)]
+  const complete = totals.length === SUITES.length
   return {
     reds,
-    passed: total ? Number(total[1]) : -1,
-    failed: total ? Number(total[2]) : -1,
+    passed: complete ? totals.reduce((sum, m) => sum + Number(m[1]), 0) : -1,
+    failed: complete ? totals.reduce((sum, m) => sum + Number(m[2]), 0) : -1,
     text
   }
 }

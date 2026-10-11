@@ -1,3 +1,4 @@
+import { t } from '@shared/i18n'
 import { useEffect, useState } from 'react'
 import { TITLEBAR_HEIGHT } from '@shared/theme'
 import { Icon } from './Icon'
@@ -49,20 +50,23 @@ export function TitleBar(): React.JSX.Element {
         <use href={`#${spriteIdFor('logo.svg')}`} />
       </svg>
       <span className="grad-gold-text font-display text-[16px] font-semibold tracking-[5px]">
-        调律者转换器
+        {t('app.title')}
       </span>
 
       <div className="flex-1" />
 
       <div className="flex items-center gap-1.5">
-        <CaptionButton label="最小化" onClick={() => void window.api.minimizeWindow()}>
+        <CaptionButton
+          label={t('shell.window.minimize')}
+          onClick={() => void window.api.minimizeWindow()}
+        >
           <Glyph>
             <path d="M7 12h10" />
           </Glyph>
         </CaptionButton>
 
         <CaptionButton
-          label={maximized ? '向下还原' : '最大化'}
+          label={maximized ? t('shell.window.restore') : t('shell.window.maximize')}
           onClick={() => void window.api.toggleMaximizeWindow()}
         >
           <Glyph>
@@ -77,7 +81,11 @@ export function TitleBar(): React.JSX.Element {
           </Glyph>
         </CaptionButton>
 
-        <CaptionButton label="关闭" danger onClick={() => void window.api.closeWindow()}>
+        <CaptionButton
+          label={t('shell.window.close')}
+          danger
+          onClick={() => void window.api.closeWindow()}
+        >
           {/* 图形素材里现成的 close 走 sprite；最小化 / 最大化是两笔，素材里没有同形 */}
           <Icon name="close" size={13} />
         </CaptionButton>

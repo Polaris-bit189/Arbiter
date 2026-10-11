@@ -426,6 +426,17 @@ MCP 入口」用的是 `existsSync`，而**普通 Node 看不进 asar**，那条
 的产物 + cwd 不在仓库里）才撞上，报的还是「这个安装包可能早于 0.2.0」这种方向反了的提示。
 守卫：`npm run test:plugin` + `npm run falsify:plugin-launch`（4 个变异，已通过）。
 细节见 `docs/NOTES.md` 约束 21。
+⚠️ **2026-09-17 补了同一族的第三个实例**：`candidateRoots()` 只认三个**默认**安装位置，
+安装时改了目录（如 `D:\tools\Arbiter`）就等于「没装」——`resolveTarget()` 返回 null、
+插件整个起不来。修法是去注册表卸载表里问一句；守卫是 `npm run test:plugin-target`
+（**30 条**，纯逻辑 + 一次临时注册表键往返）+ `npm run falsify:plugin-target`
+（**14 个变异**，单轮 9.9 秒）。同样**只在用户机器上现形**，同样被仓库根那条候选长期掩盖。
+
+⚠️ 第一版的覆盖是**假的**：测试注入的是**叶子键**而生产注入的是**父键**
+（条目在 `…\Uninstall` 的 `{GUID}` 子键下），于是 `reg query` 的 `/s`（递归子键）
+**拿掉都不会红**——而生产形态下少了它就是查不到、整条修复静默失效。三路对抗审计
+另点出 7 个「改了它、一个都不会红」的支柱，都补了断言与变异。
+**判据：测试的注入形状必须与生产一致，否则变异覆盖是假的**（与约束 30 同源）。
 ⚠️ **这里当时只看见了症状的一半**：`existsSync` 是「看不见 asar」，而真正致命的是
 **加载**——Node 读不进 asar，所以入口在 asar 里就必然起不来。2026-09-14 才发现并修掉，
 见 §9.8 的 D8。
@@ -1035,8 +1046,54 @@ M8 系统集成：必须等 M4 完成（要复用 MCP 的参数解析与引擎�
 | **P1-10**                               | HDR → SDR 色调映射                       | 实测通过的那串 zscale+tonemap 对**无色彩标签的源直接 rc=127**，必须先补标签。源的色彩信息就在 ffmpeg 打开输入那段 stderr 里，**可以白拿**（约束 5 那条链路已经解析到那里了）                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | **P1-11**                               | 10-bit / 4:4:4 中间格式                  | libx264 支持 `yuv420p10le`（这个假设原先错了）。但要定位成「给二次处理用的中间格式」——8-bit 源转 10-bit **不会增加信息量**，且产物很多老播放器解不了                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | **P1-12**                               | 视频防抖（vidstab 两遍）                 | 中间文件 `.trf` **必须放临时目录且并发时名字唯一**（约束 9 那个「并发输出名占位」问题的另一个实例）；`zoom` 会裁掉画面边缘，要暴露给用户                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| **P0-10**                               | **编码质量与速度档（HandBrake 那一套）** | 今天视频编码是**写死**的：`libx264 -preset veryfast -crf 23`（webm 走 vp9 `-crf 32`，NVENC 走 `-cq 30`），用户只能给「目标体积 / 目标码率」。缺的是 HandBrake 那个 Video 页的三件套：**Constant Quality（RF / CRF）**、**Encoder Preset**（Ultrafast → Placebo）、**Tune**（film / animation / grain）。⚠️ 三个都是 `TaskOptions` 的扩展，会动参数通道整条链（契约 / 校验 / 卡片摘要 / 历史 / MCP schema）。⚠️ **`-tune` 那套要先实测再放**：NVENC 那次实测里 `-tune hq` 一堆参数只换来 +0.01 SSIM，别照抄。⚠️ **预设一放宽，`ENGINE_CAPACITY` 那本账会失真**：`placebo` 一帧要好几秒，而「份数」是按**输入体积**估的（约束 25 记的那条方向保守的欠估）。 |
+| ~~**P0-10**~~ ✅ **已完成**（2026-09-17）                    | **编码质量与速度档（HandBrake 那一套）** | **已落地**：`TaskOptions.quality = { crf?, preset?, tune? }`，走完整条参数通道（契约 / `setOptions` / 卡片摘要 / 历史 / UI 面板）。**范围**：只对走 libx264 的视频出口开放（`supportsQuality()`：mp4 / mkv / mov / m4v / avi）——webm 走 vp9，它的 CRF 是 0~63 的**另一条尺子**、速度档也不是 `-preset`；gif 走调色板滤镜，根本没有质量旋钮。**三项实测把三件事定了下来**（数据与口径见 `docs/NOTES.md` 约束 41）：① **同一个 CRF 在不同预设下不是同一个画质**——`veryfast` 在同 CRF 下体积最小而 SSIM 最差，所以界面文案**不能**写「越慢越小」；② `preset` 的时间跨度是 5.6~6.6×（`veryfast → veryslow`），而画质从 `fast` 往后基本不再涨；③ **慢预设更吃内存**（1080p 峰值 RSS：veryfast 1544 MiB → veryslow 2525 → placebo 3556），所以 `taskCost()` 多了一个输入——预设倍率，`placebo` 那种大文件只开出 1 路。⚠️ **与输出约束互斥**（`-crf` 与 `-b:v` 打架时 x264 会回到质量模式、把体积目标变成一句空话），与无损裁剪和 `remux=force` 也互斥，三处都是**报错**不是静默二选一。⚠️ **与显卡编码互斥**：`-crf` 与 `-cq` 同号不同质、预设也不是同一个词汇表，所以设了质量档就**退回 CPU 并说出来**。⚠️ **MCP 侧没接**（`convert_file` 的参数面），与 `mode` / `priority` 那两次一样是独立决策。 |
 | **P1-15**                               | GIF / 动图的参数化                       | 现在 `fps=12` 与 `scale=480` 是**写死的**。但 GIF 只有 256 色，画质已是下限——真要体积就引导用户转 WebP 动图                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+
+### 9.2b 加密音乐容器（用户 2026-09-17 追加，已落地）
+
+**已做**：`.ncm` / `.qmc*` / `.mflac` / `.mgg*` / `.kwm` / `.xm` 六类，
+走新引擎 `encmusic`（先开壳，再按需要交给 ffmpeg）。**刻意没做**：酷狗 `.kgm`/`.kgma`
+——它的逐字节掩码表没能从可达的源里取到（GitHub 直连不通，npm 上那个包是 WASM、
+表在二进制数据段里）。**没有登记它们**而不是登记一个必然失败的扩展名。
+
+⚠️ **验证只到「与独立实现一致」这一层**，没有真实样本：随仓库提交的
+`scripts/fixtures/encmusic/sample.ncm` 是合成正弦波容器，但它解出来的字节与
+**Python 的 `ncmdump` 逐字节相同**——那是唯一有跨实现证据的一条。缺口如实记在
+`docs/NOTES.md`（约束 42）。谁拿到真实样本，放进 fixtures 补一条断言即可。
+
+⚠️ **这一类有一个「一键回退」**：`node D:\check\make-clean-copy.mjs --no-encmusic`
+能导出一份剥掉它的版本，规则在 `scripts/encmusic-strip.json`，剥完还会**复核整棵树**
+里搜不到特征串。理由：同类项目在别处有过下架记录，这条路必须能在几分钟内走完。
+
+### 9.2c 界面中英双语（i18n，2026-09-17，已落地）
+
+计划见 `C:\Users\Polaris\.claude\plans\mighty-zooming-graham.md`（P0~P8），**P0~P5 已完成**。
+判据与踩过的坑全部记在 `docs/NOTES.md` 约束 43，这里只记**做到哪、还剩什么**。
+
+| 阶段 | 内容 | 状态 |
+| --- | --- | --- |
+| P0 | 四道闸门 + 冻结快照 + 锚点预检 | ✅ |
+| P1 | i18n 内核 + `Settings.language`（三态，默认跟随系统）+ 三个入口 | ✅ |
+| P2 | 渲染层字典（20 个文件） | ✅ |
+| P3 | `shared` 的摘要与标签（`describeTrim` / `describeOptions` / `describeAction`） | ✅ |
+| P4 | 主进程可见文案（12 个文件）+ `CATEGORY_LABEL` 三合一 | ✅ |
+| P5 | `progress.stage` 码化（`stagePair` / `stageRef`） | ✅ |
+| P6 | **MCP / CLI / 插件**（约 344 条，英文要**真的写**而不是机翻） | ⬜ **未做** |
+| P7 | 自家 error 的追溯本地化（可选项） | ⬜ 未做 |
+| P8 | 文档与约束（约束 43 已写） | 🔶 部分 |
+
+**今天 `src/**` 里除字典本体之外，一条用户可见的中文字面量都没有**（闸门 a 逐文件为 0）。
+
+⚠️ **P6 是剩下最大的一块**，而且它不是机械替换：`src/mcp/schema.ts` 里那 171 条
+`TOOL_DESCRIPTIONS` 是**给模型读的 API 说明书**，`next_steps` 是给 agent 的下一步指令，
+英文版必须读起来像原生英文。另外 `formatsView.ts` 里还留着自己那份 `CATEGORY_LABELS`
+（第三份副本），要等它能取到语言之后再收敛到 `@shared/i18n/keys`。
+
+⚠️ **两处如实记下的取舍**：
+- `src/renderer/index.html` 的静态 `<title>` 改成了 `Arbiter`（语言中立的产品名）。
+  理由是它只在 JS 起来前可见几毫秒，而运行时由 `App.tsx` 的 `document.title` 接管。
+- **历史里已记录的原因不追溯翻译**（P7 的活）：切到英文后，**早先失败**的那条历史
+  条目那行原因仍是中文。设置页该有一行小字说明，P8 补。
 
 ### 9.3 需要新引擎（按需下载，走 M7 那套）
 

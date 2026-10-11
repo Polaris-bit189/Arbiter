@@ -370,7 +370,7 @@ async function main(): Promise<void> {
 
   const { size: clipBytes } = await statOf(clips[0])
   console.log(
-    `  单个 mp4 ${clipBytes} 字节 → ffmpeg 代价 ${taskCost('ffmpeg', clipBytes)} 份` +
+    `  单个 mp4 ${clipBytes} 字节 → ffmpeg 代价 ${taskCost('ffmpeg', clipBytes, undefined)} 份` +
       `（≤ 1 MiB 才算小文件）`
   )
 
@@ -523,7 +523,7 @@ async function main(): Promise<void> {
     const { size: heavyBytes } = await statOf(heavy[0])
     console.log(
       `  单个 ${(heavyBytes / 1024 / 1024).toFixed(1)} MiB → ffmpeg 代价 ` +
-        `${taskCost('ffmpeg', heavyBytes)} 份（于是容量 12 只能开出 4 路）`
+        `${taskCost('ffmpeg', heavyBytes, undefined)} 份（于是容量 12 只能开出 4 路）`
     )
     // 目标钉 avi：h264 → mkv 会命中 remux（`-c copy`，一百多毫秒就跑完），
     // 那样这一节测的是「复制文件」而不是「编码」，比值全是噪声。

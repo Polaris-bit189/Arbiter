@@ -36,6 +36,24 @@ const FOLDER_SCAN = 'src/main/core/folderScan.ts'
  * 命中次数一定要打印出来。只说「没命中唯一一次」的话，0 次和 2 次根本分不清——
  * 而「锚点命中 2 次」正是上次踩过的坑：6 空格缩进的那一行是 10 空格同款行的子串。
  */
+/**
+ * 本机码页表示得了中文吗——决定带 `requiresCjk` 的那条变异**测不测得了**。
+ *
+ * 与 `test-integration.ts` 的 `CN_ROUNDTRIP_OK` 是**同一条判据**（都问 `chcp.com`：
+ * 936 = GBK、54936 = GB18030），因为两边要回答的是同一个问题：`reg.exe` 往管道里
+ * 写的是系统 OEM 码页，英文 Windows 上中文**写进去那一刻**就成了 `??????`。
+ *
+ * ⚠️ 那边的两条中文断言会因此走 `notice()` 跳过（进汇总行的「跳过」）。于是这一侧
+ * 打「GB18030 兜底」的那条变异就**注定零红**——不是断言失效，是**压根没被测到**。
+ * 不让它红、也不让它假装通过，而是**跳过它并说出来**。
+ */
+const OEM_CP = (() => {
+  const out = spawnSync('chcp.com', [], { windowsHide: true, encoding: 'utf8' })
+  const m = /(\d{3,5})/.exec(out.stdout ?? '')
+  return m ? Number(m[1]) : null
+})()
+const CN_ROUNDTRIP_OK = OEM_CP === 936 || OEM_CP === 54936
+
 const MUTATIONS = [
   {
     file: CLI,
@@ -80,14 +98,16 @@ const MUTATIONS = [
   {
     file: CLI,
     name: '--to 的形状校验拿掉',
-    // ⚠️ 这里**故意不用 `String.raw`**：下面那行返回值里有 `${value}`，
-    // 而在模板字符串里那是**插值**，会被当成 JS 表达式求值（ReferenceError）。
-    // 双引号普通字符串没有这个陷阱，代价只是把 `'` 转义一下。
     // ⚠️ 必须带上返回值那一行：`cli.ts` 里现在有**两处**同样的 `EXT_SHAPE` 判断
     // （`parseConvertRequest` 与 E-1 的 `parseCliRequest`），只锚 `if` 那一行会命中 2 次。
     // 两处的差别就在返回值：这边到 `}` 结束，那边多了 `, json }`。
-    from: "      if (!EXT_SHAPE.test(ext)) {\n        return { kind: 'error', message: `目标格式不像个扩展名：${value}` }\n",
-    to: "      if (false && !EXT_SHAPE.test(ext)) {\n        return { kind: 'error', message: `目标格式不像个扩展名：${value}` }\n",
+    //
+    // ⚠️ P4（i18n）把这两行里的**文案**换成了 `t('integration.cli.badExt', { value })`，
+    //    锚点跟着文案走——变异的判据（那条 `if`）一个字没动，验的还是同一件事。
+    //    （原先「不用 `String.raw`」的理由是返回值里有 `${value}`，那是个插值；
+    //    改走字典之后没有 `${}` 了，两边写法都能用，这里保持原来的双引号不动。）
+    from: "      if (!EXT_SHAPE.test(ext)) {\n        return { kind: 'error', message: t('integration.cli.badExt', { value }) }\n",
+    to: "      if (false && !EXT_SHAPE.test(ext)) {\n        return { kind: 'error', message: t('integration.cli.badExt', { value }) }\n",
     expect: ['--to 形状非法（含引号）→ error：它会被拼进注册表命令行']
   },
   {
@@ -122,7 +142,10 @@ const MUTATIONS = [
     name: 'reg.exe 输出按 UTF-8 硬解（去掉 GB18030 兜底）',
     from: String.raw`      return new TextDecoder('gb18030').decode(buffer)`,
     to: String.raw`      return buffer.toString('utf8')`,
-    expect: ['★ 中文 command 值经模块解码后一字不差（UTF-8 硬解会在这里变成乱码）']
+    expect: ['★ 中文 command 值经模块解码后一字不差（UTF-8 硬解会在这里变成乱码）'],
+    // 见上面 `CN_ROUNDTRIP_OK` 那段：英文机器上那两条中文断言会走 `notice()` 跳过，
+    // 这条变异因此注定零红——**跳过它**，并让收尾把跳过数说出来。
+    requiresCjk: true
   },
   {
     // 「点一下只转 10 个里选中的那个」的防线。没了它，多选时 %1 只替换出第一个路径，
@@ -138,8 +161,9 @@ const MUTATIONS = [
     // 去认，而那段文本正是 GBK 解出来的乱码，于是「重复卸载」这条幂等路径整条失效。
     file: INTEGRATION,
     name: 'readContextMenu 把「键不存在」当错误',
-    from: String.raw`    const error = query.code === -1 ? query.stderr || 'reg.exe 不可用' : null`,
-    to: String.raw`    const error = query.code !== 0 ? query.stderr || 'reg.exe 不可用' : null`,
+    // P4（i18n）：那句文案改走字典了，锚点跟着换——判据还是「只看退出码」。
+    from: String.raw`    const error = query.code === -1 ? query.stderr || t('integration.reg.unavailable') : null`,
+    to: String.raw`    const error = query.code !== 0 ? query.stderr || t('integration.reg.unavailable') : null`,
     expect: [
       '前置：起点确实是未注册（装了的话下面「装上了」那条断言就是空转）',
       '卸载没有报错',
@@ -413,7 +437,11 @@ const TS = 'tsconfig.test.json'
 function runTests() {
   const out = spawnSync('npx', ['tsx', '--tsconfig', TS, 'scripts/test-integration.ts'], {
     encoding: 'utf8',
-    shell: true
+    shell: true,
+    // 与其余 falsify 脚本对齐（这一支原先漏了，默认只有 1 MiB）。这个套件要打印
+    // 185 条断言的名字、外加注册表操作的原始输出——一旦超限就是**子进程被杀 +
+    // 输出截断**，症状恰恰是「抠不到汇总行、只报一个 `-1`」，看起来像测试崩了。
+    maxBuffer: 32 * 1024 * 1024
   })
   const text = out.stdout + out.stderr
   const reds = text
@@ -426,9 +454,23 @@ function runTests() {
         .trim()
     )
   const counts = /通过 (\d+) \/ 失败 (\d+) \/ 跳过 (\d+)/.exec(text)
+  const passed = counts ? Number(counts[1]) : -1
+  // ⚠️ 抠不到汇总行时必须把**原始现场**打出来，理由与 `falsify-tasks.mjs` 那份逐字相同。
+  // 这一支尤其需要：CI 上曾报过一次 `通过 -1`，而脚本当时只留下一句
+  // 「先单独跑一次看输出」——**CI 上没有人能「单独跑一次」**，线索就断在那儿了
+  // （那个 job 从 2026-09-17 起一直红着，没人查得出为什么）。
+  if (passed === -1) {
+    console.error(
+      `  [诊断] 抠不到汇总行：status=${out.status} signal=${out.signal} ` +
+        `error=${out.error ? String(out.error.message ?? out.error) : 'null'} ` +
+        `stdout=${(out.stdout ?? '').length}B stderr=${(out.stderr ?? '').length}B`
+    )
+    console.error('  --- 原始输出尾部 1500 字符 ---')
+    console.error(text.slice(-1500))
+  }
   return {
     reds,
-    passed: counts ? Number(counts[1]) : -1,
+    passed,
     failed: counts ? Number(counts[2]) : -1,
     skipped: counts ? Number(counts[3]) : -1
   }
@@ -452,8 +494,21 @@ for (const file of new Set(MUTATIONS.map((m) => m.file))) {
 }
 
 let problems = 0
+let skipped = 0
 
 for (const m of MUTATIONS) {
+  // 前提不成立的变异：**跳过并说出来**——不算通过、也不算失败。
+  // 详见上面 `CN_ROUNDTRIP_OK` 那段：不让它报「有断言没红」，因为红的判定
+  // 在这里问错了对象（断言没红是因为它压根没被跑到，不是因为它抓不住）。
+  if (m.requiresCjk && !CN_ROUNDTRIP_OK) {
+    skipped += 1
+    console.log(
+      `\n[${m.name}] **跳过**：本机 OEM 码页 ${OEM_CP ?? '（取不到）'} 表示不了中文，` +
+        `这条变异的前提（中文能在注册表里原样往返）不成立。**跳过不是通过。**`
+    )
+    continue
+  }
+
   const original = originals.get(m.file)
   const hits = original.split(m.from).length - 1
   if (hits !== 1) {
@@ -493,7 +548,8 @@ for (const [file, original] of originals) {
 
 console.log(
   problems === 0
-    ? '\n反证通过：每个变异都被对应的断言抓住了，且源码已还原。'
+    ? '\n反证通过：每个变异都被对应的断言抓住了，且源码已还原。' +
+        (skipped > 0 ? `（其中 ${skipped} 个因前提不成立被跳过，见上面逐条说明）` : '')
     : `\n反证不通过：${problems} 处有问题。`
 )
 process.exit(problems === 0 ? 0 : 1)

@@ -11,6 +11,8 @@ import {
   resolveDefaultTarget,
   targetsFor
 } from '@shared/formats'
+// 用户可见文案一律走字典（P6）。这一片是 `mcp.jobs.*`，见 `@shared/i18n/parts/mcpJobs.ts`。
+import { t } from '@shared/i18n'
 import { convert, ConversionCanceled, ConversionFailed } from '../main/converters'
 // 「产物不得为空」的判据与文案**取自共用件**，不在这里就地写一份。
 // 审计（2026-09-02 分发版）抓到的正是「同一条规矩在两个入口各写各的」：
@@ -296,30 +298,36 @@ function assertConvertible(source: string, toExt: string): { fromExt: string; en
   const fromExt = extOf(source)
   if (fromExt === '') {
     throw new McpToolError(
-      `认不出源文件的扩展名：${source}`,
-      { hint: '源文件必须带扩展名，比如 D:\\video\\a.mkv' },
+      t('mcp.jobs.unknownSourceExt', { source }),
+      { hint: t('mcp.jobs.unknownSourceExtHint') },
       { code: 'unknown_format' }
     )
   }
   if (categoryOf(fromExt) === null) {
-    throw new McpToolError(`不认识的源格式 .${fromExt}`, { fromExt }, { code: 'unknown_format' })
+    throw new McpToolError(
+      t('mcp.jobs.unknownSourceFormat', { ext: fromExt }),
+      { fromExt },
+      {
+        code: 'unknown_format'
+      }
+    )
   }
   const targets = targetsFor(fromExt)
   if (targets.length === 0) {
     throw new McpToolError(
-      `.${fromExt} 目前没有任何可用的目标格式`,
+      t('mcp.jobs.noTargets', { ext: fromExt }),
       { fromExt, targets },
       { code: 'unknown_format' }
     )
   }
   if (!targets.includes(toExt)) {
     throw new McpToolError(
-      `.${fromExt} 转不了 .${toExt}`,
+      t('mcp.jobs.targetNotSupported', { from: fromExt, to: toExt }),
       {
         fromExt,
         requested: toExt,
         targets,
-        hint: '请从 targets 里选一个。矩阵里没有的组合多半是实测过做不到，不是漏配。'
+        hint: t('mcp.jobs.targetNotSupportedHint')
       },
       { code: 'target_not_supported' }
     )
@@ -329,7 +337,7 @@ function assertConvertible(source: string, toExt: string): { fromExt: string; en
     // targetsFor 与 engineFor 同源，走到这里说明两张表分家了——那是个真 bug，
     // 报一句能直接定位的话，别让它伪装成「agent 参数给错了」。
     throw new McpToolError(
-      `内部不一致：.${fromExt} → .${toExt} 在 targetsFor 里合法，却路由不到引擎`,
+      t('mcp.jobs.engineRouteMismatch', { from: fromExt, to: toExt }),
       { fromExt, toExt },
       { code: 'internal' }
     )
@@ -371,15 +379,15 @@ export function assertEngineReady(fromExt: string, toExt: string): void {
   const needed = requiresDownload(fromExt, toExt)
   if (needed === null || engineReady(needed)) return
   throw new McpToolError(
-    `这条转换需要 ${engineLabel(needed)} 引擎，本机还没装好，无法执行。`,
+    t('mcp.jobs.engineMissing', { engine: engineLabel(needed) }),
     {
       engine: needed,
       // 把「本来要转成什么」一起带上：`auto` 解析之后目标格式是**算出来的**，
       // 被拒时 agent 手里没有别的地方能知道它算成了哪个（batch 的 rejected 条目靠这个）。
       to: toExt,
       hint:
-        `请在 Arbiter（调律者转换器）的关于页里下载 ${engineLabel(needed)}，` +
-        '或改用不需要该引擎的目标格式。'
+        t('mcp.jobs.engineMissingHintHead', { engine: engineLabel(needed) }) +
+        t('mcp.jobs.engineMissingHintTail')
     },
     { code: 'engine_missing' }
   )
@@ -467,7 +475,15 @@ export class JobRegistry {
       engine: route.engine,
       // 体积**只在这里量一次**：入队之后源文件再变（用户改盘、或上一条任务恰好
       // 把它当输入）不该让这条任务占的份数跟着变——那本账在它跑完之前是要还的。
-      cost: engineCost(route.engine, taskCost(route.engine, fileSizeOrUndefined(route.source))),
+      // 第三个参数是**任务的参数**（编码质量档会改变一条任务占几份）。
+      // MCP 这一侧今天没有任何能传进去的入口——`convert_file` 的 `quality` 参数在
+      // 接通之前就被删掉了（见 `schema.ts` 里那段），而 `mode` / `priority` 都不影响
+      // 内存。所以这里显式传 `undefined`：它不是「忘了」，是「没有」。
+      // 谁将来给 MCP 接上质量档，**这一行要跟着改**，否则那本账会按快档记。
+      cost: engineCost(
+        route.engine,
+        taskCost(route.engine, fileSizeOrUndefined(route.source), undefined)
+      ),
       verify: spec.verify === true,
       priority,
       cancel: new CancelToken()
@@ -557,10 +573,10 @@ export class JobRegistry {
   ): string {
     if (outputPath !== undefined && isDirectory(outputPath)) {
       throw new McpToolError(
-        `output_path 指向的是一个**目录**，不是文件路径：${outputPath}`,
+        t('mcp.jobs.outputPathIsDir', { path: outputPath }),
         {
           output_path: outputPath,
-          hint: 'output_path 要写成产物的完整路径（含文件名），比如 D:\\out\\clip.jpg；想要落在某个目录里请改用 batch_convert 的 output_dir'
+          hint: t('mcp.jobs.outputPathIsDirHint')
         },
         { code: 'output_conflict' }
       )
@@ -568,10 +584,10 @@ export class JobRegistry {
 
     if (!computed && outputPath !== undefined && existsSync(outputPath)) {
       throw new McpToolError(
-        `output_path 上已经有一个文件了，不会往它上面写：${outputPath}`,
+        t('mcp.jobs.outputPathExists', { path: outputPath }),
         {
           output_path: outputPath,
-          hint: '这条转换没有覆盖它，一个字节都没动。换一个路径，或者先自己把那个文件移走 / 删掉，再原样重发这次调用。'
+          hint: t('mcp.jobs.outputPathExistsHint')
         },
         { code: 'output_conflict' }
       )
@@ -682,7 +698,7 @@ export class JobRegistry {
           job,
           'failed',
           'source_corrupt',
-          error.summary ?? '转换失败（引擎返回了非零退出码）',
+          error.summary ?? t('mcp.jobs.failedNonZeroExit'),
           error.logTail
         )
         return
@@ -834,7 +850,7 @@ export class JobRegistry {
     }
 
     // 既不在队列也不在跑，却还不是终态——调度器自己出问题了，别静默返回。
-    this.finish(job, 'failed', 'internal', '内部状态异常：这个 job 既不在队列里也不在运行中')
+    this.finish(job, 'failed', 'internal', t('mcp.jobs.internalStateLost'))
     return job
   }
 
@@ -847,14 +863,26 @@ export class JobRegistry {
 /**
  * 进度的「内容指纹」。用来判断「这次进度和上次是不是同一件事」——
  * 不确定进度阶段的 `stage` 文案是恒定的，指纹相同就不必再报一次。
+ *
+ * ⚠️ **不确定进度这一支用的是 `stageRef`（码），不是 `stage`（中文句子）。**
+ * 两者今天等价（`stage` 恒为中文、由同一个码算出），但指纹的语义是「这是不是同一个
+ * 阶段」，而**码才是那个身份**。用一个会随语言/措辞变动的句子当指纹，风险是
+ * 「两个不同的阶段撞成同一个 key」——那样 agent 只会收到第一条进度，后面全被吞掉。
+ * 没有码的老进度对象回落到 `stage`。
+ *
+ * 导出是为了让 `scripts/test-mcp-server.ts` 直接断它——**只是 import，不是重写**。
+ * 这条判据必须落在函数本身上：从外面观测「谁先跑」是抢时序的测试，机器一忙就飘，
+ * 而飘出来的样子恰好是「功能坏了」（与 `pickNextIndex` 导出给测试同一个理由）。
  */
-function progressKey(progress: TaskProgress | null): string {
+export function progressKey(progress: TaskProgress | null): string {
   if (progress === null) return ''
   switch (progress.kind) {
     case 'determinate':
       return `d:${Math.round(progress.percent)}`
     case 'indeterminate':
-      return `i:${progress.stage}`
+      return progress.stageRef === undefined
+        ? `i:${progress.stage}`
+        : `i:${JSON.stringify(progress.stageRef)}`
     case 'batch':
       return `b:${progress.done}/${progress.total}`
   }

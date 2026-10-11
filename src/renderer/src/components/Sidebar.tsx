@@ -1,3 +1,4 @@
+import { t, type KeysOf } from '@shared/i18n'
 import { useEffect, useState } from 'react'
 import type { Task, TaskStatus } from '@shared/types'
 import { Icon } from './Icon'
@@ -6,12 +7,17 @@ import { useTasks } from '../store/useTasks'
 import { spriteIdFor } from '../lib/icons'
 import { cn } from '../lib/cn'
 
-/** 导航项。顺序即设计稿里的顺序，图标名对应 `assets/icons/ui/icon-<name>.svg`。 */
-const NAV: ReadonlyArray<{ page: NavPage; icon: string; label: string }> = [
-  { page: 'work', icon: 'convert', label: '调律工作台' },
-  { page: 'history', icon: 'history', label: '历史记录' },
-  { page: 'settings', icon: 'gear', label: '格式设置' },
-  { page: 'about', icon: 'info', label: '关于' }
+/**
+ * 导航项。顺序即设计稿里的顺序，图标名对应 `assets/icons/ui/icon-<name>.svg`。
+ *
+ * 存的是**键**而不是句子（与 `CATEGORY_LABEL` 同一个形状）：`KeysOf` 让「写了一
+ * 个不存在的键」是编译错误，取值那一处写 `t(...)` 才拿到当前语言的句子。
+ */
+const NAV: ReadonlyArray<{ page: NavPage; icon: string; label: KeysOf<'shell.nav.'> }> = [
+  { page: 'work', icon: 'convert', label: 'shell.nav.work' },
+  { page: 'history', icon: 'history', label: 'shell.nav.history' },
+  { page: 'settings', icon: 'gear', label: 'shell.nav.settings' },
+  { page: 'about', icon: 'info', label: 'shell.nav.about' }
 ]
 
 /**
@@ -64,10 +70,12 @@ export function Sidebar(): React.JSX.Element {
             <use href={`#${spriteIdFor('logo.svg')}`} />
           </svg>
           <span className="grad-gold-text font-display text-[15px] font-semibold tracking-[5px]">
-            调律者转换器
+            {t('app.title')}
           </span>
         </div>
-        <div className="mt-2 text-[10px] tracking-[1px] text-fg-faint">令万物归于其应有之格式</div>
+        <div className="mt-2 text-[10px] tracking-[1px] text-fg-faint">
+          {t('shell.sidebar.tagline')}
+        </div>
       </div>
 
       <nav className="mt-3.5 flex flex-col gap-0.5">
@@ -104,12 +112,12 @@ export function Sidebar(): React.JSX.Element {
               )}
 
               <Icon name={item.icon} size={17} className="shrink-0" />
-              <span className={active ? 'text-gold-pale' : 'text-fg-muted'}>{item.label}</span>
+              <span className={active ? 'text-gold-pale' : 'text-fg-muted'}>{t(item.label)}</span>
 
               {item.page === 'work' && running > 0 && (
                 <span
                   className="ml-auto flex items-center gap-1.5"
-                  title={`正在调律 ${running} 个`}
+                  title={t('shell.sidebar.running', { count: running })}
                 >
                   <span aria-hidden="true" className="size-1.5 rounded-full bg-gold" />
                   <span className="font-mono text-[11px] text-gold-bright tabular-nums">
@@ -135,7 +143,10 @@ export function Sidebar(): React.JSX.Element {
           className="pointer-events-none absolute inset-0 opacity-10"
           style={{ backgroundImage: 'var(--pattern-honeycomb)' }}
         />
-        <span className="relative">{version.length > 0 && `v${version} · `}秩序归于格式</span>
+        <span className="relative">
+          {version.length > 0 && `v${version} · `}
+          {t('shell.sidebar.footer')}
+        </span>
       </footer>
     </aside>
   )

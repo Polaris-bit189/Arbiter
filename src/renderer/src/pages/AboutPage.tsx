@@ -1,3 +1,4 @@
+import { t } from '@shared/i18n'
 import { useEffect, useState } from 'react'
 import { CATEGORIES, type EngineKey, type EngineProgress, type EngineStatus } from '@shared/types'
 import { sourceExtsByCategory } from '@shared/formats'
@@ -148,7 +149,7 @@ function EngineRow({
             <span className="font-mono text-[11px] text-fg-faint">
               {progress.percent > 0
                 ? `${Math.round(progress.percent * 100)}% · ${formatMb(progress.totalBytes)}`
-                : '正在解包…'}
+                : t('about.engine.unpacking')}
             </span>
           </div>
         )}
@@ -156,18 +157,20 @@ function EngineRow({
 
       <span className={`badge ${ready ? 'done' : 'error'}`}>
         <Icon name={ready ? 'check' : 'error'} size={16} />
-        {ready ? '已就绪' : '未就绪'}
+        {ready ? t('about.engine.ready') : t('about.engine.missing')}
       </span>
 
       {downloadable && (
         <button type="button" onClick={onInstall} disabled={disabled} className={SMALL_BUTTON}>
-          {installing ? '下载中…' : `下载（${formatMb(status.downloadBytes ?? 0)}）`}
+          {installing
+            ? t('about.engine.downloading')
+            : t('about.engine.download', { size: formatMb(status.downloadBytes ?? 0) })}
         </button>
       )}
 
       {PROBEABLE.has(status.key) && (
         <button type="button" onClick={onProbe} disabled={disabled} className={SMALL_BUTTON}>
-          {probing ? '探测中…' : '探测版本'}
+          {probing ? t('about.engine.probing') : t('about.engine.probe')}
         </button>
       )}
     </li>
@@ -230,11 +233,13 @@ export function AboutPage(): React.JSX.Element {
           <use href="#logo" />
         </svg>
         <div className="min-w-0">
-          <h1 className="grad-gold-text font-display text-2xl tracking-[0.3em]">调律者转换器</h1>
+          <h1 className="grad-gold-text font-display text-2xl tracking-[0.3em]">
+            {t('app.title')}
+          </h1>
           {/* 拉丁名不写死在这里：它来自 productName（dev 下 app.getName() 读 package.json，
               打包后读 electron-builder.yml），写死就等于同一个名字有两个来源 */}
           <p className="mt-1 font-mono text-xs text-fg-muted">
-            {info === null ? '读取中…' : `${info.name} · v${info.version}`}
+            {info === null ? t('about.loading') : `${info.name} · v${info.version}`}
           </p>
         </div>
       </header>
@@ -247,14 +252,12 @@ export function AboutPage(): React.JSX.Element {
 
       {/* ── 引擎状态 ───────────────────────────────────────────── */}
       <section className="relative mt-8">
-        <SectionTitle>引擎状态</SectionTitle>
+        <SectionTitle>{t('about.engines')}</SectionTitle>
 
-        <p className="mb-3 text-xs text-fg-faint">
-          版本号要起一个子进程去问（LibreOffice 约 3～5 秒），所以不随页面自动探测。
-        </p>
+        <p className="mb-3 text-xs text-fg-faint">{t('about.engines.hint')}</p>
 
         {loading && statuses.length === 0 ? (
-          <p className="py-6 text-center text-xs text-fg-faint">读取中…</p>
+          <p className="py-6 text-center text-xs text-fg-faint">{t('about.loading')}</p>
         ) : (
           // 三元的一个分支只能是**一个**表达式，所以这里必须有 Fragment：
           // 直接写 `{error && …}` 是「JSX 子节点」而不是表达式，语法就不对。
@@ -267,7 +270,7 @@ export function AboutPage(): React.JSX.Element {
                   onClick={() => setError(null)}
                   className="shrink-0 text-fg-faint hover:text-fg"
                 >
-                  关闭
+                  {t('about.dismiss')}
                 </button>
               </p>
             )}
@@ -292,7 +295,10 @@ export function AboutPage(): React.JSX.Element {
                       .install(status.key)
                       .catch((err: unknown) => {
                         setError(
-                          `${status.label} 下载失败：${err instanceof Error ? err.message : String(err)}`
+                          t('about.engine.installFailed', {
+                            label: status.label,
+                            error: err instanceof Error ? err.message : String(err)
+                          })
                         )
                       })
                   }}
@@ -305,11 +311,14 @@ export function AboutPage(): React.JSX.Element {
 
       {/* ── 格式支持 ───────────────────────────────────────────── */}
       <section className="relative mt-8">
-        <SectionTitle>格式支持</SectionTitle>
+        <SectionTitle>{t('about.formats')}</SectionTitle>
 
+        {/* 这一句被拆成三段：中间那两个数字各自套着一个上色的 <span>，
+            合成一句就必须把样式拆掉（见 `parts/about.ts` 的文件头）。 */}
         <p className="mb-4 text-xs text-fg-muted">
-          共支持 <span className="font-mono text-gold-bright">{TOTAL_EXTS}</span> 种源格式，归为{' '}
-          {CATEGORIES.length} 个大类；砖上写着扩展名的那种有专属图标，其余落在通用砖上。
+          {t('about.formats.supports')}{' '}
+          <span className="font-mono text-gold-bright">{TOTAL_EXTS}</span>{' '}
+          {t('about.formats.groupedInto')} {CATEGORIES.length} {t('about.formats.groupedTail')}
         </p>
 
         {CATEGORIES.map((category) => {
@@ -317,7 +326,7 @@ export function AboutPage(): React.JSX.Element {
           return (
             <div key={category} className="mb-4">
               <div className="mb-2 flex items-baseline gap-2">
-                <span className="text-xs text-fg-muted">{CATEGORY_LABEL[category]}</span>
+                <span className="text-xs text-fg-muted">{t(CATEGORY_LABEL[category])}</span>
                 <span className="font-mono text-[11px] text-fg-faint">{exts.length}</span>
               </div>
               <div className="flex flex-wrap gap-2">

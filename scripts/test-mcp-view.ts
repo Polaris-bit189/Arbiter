@@ -253,6 +253,7 @@ async function main(): Promise<void> {
     return
   }
   const { TOOL_SCHEMAS, TOOL_NAMES, TOOL_DESCRIPTIONS, jsonSchemas, openAiTools } = schemaModule
+  const { TOOL_ACCESS, ACCESS_HINTS } = schemaModule
 
   /* ------------------------------------------------ A：三个出口不许漂移 */
 
@@ -283,6 +284,61 @@ async function main(): Promise<void> {
     '三个出口都非空（防空转）',
     nameKeys.length > 0 && jsonKeys.length > 0 && openAiKeys.length > 0,
     `${nameKeys.length} / ${jsonKeys.length} / ${openAiKeys.length}`
+  )
+
+  /* ------------------------------------------- A2：副作用等级（annotations 的来源） */
+
+  // 起因（2026-09-26）：`convert_file` 曾经标着 `readOnlyHint: true`，而它的 handler
+  // 走的是**写闸门**——它会往用户盘上落产物。`readOnlyHint` 在客户端那里就是自动放行的
+  // 依据（Anthropic 目录审核标准原文：*Read-only tools can run without per-call
+  // confirmation*），所以那等于让 agent 写文件而不弹确认。
+  //
+  // 它活下来的原因是这一块**一处断言都没有**：`grep readOnlyHint scripts/` 曾经零命中。
+  // 下面三条把「分类」钉住；接线那一半在 `test-mcp-server.ts` 的第 6A 节（真问 tools/list）。
+  console.log('\n[A2] 工具的副作用等级')
+
+  const accessOf = TOOL_ACCESS as Record<string, string | undefined>
+  const nonReadTools = nameKeys.filter((name: string) => accessOf[name] !== 'read')
+  // ⚠️ 这张表是**判断**，不是形状——所以它必须双向钉：
+  //   一个新的写工具若被顺手标成 'read'，它会出现在 nameKeys 里却不在 NON_READ 里 → 红；
+  //   反过来把只读工具标成 'add' 也一样红。两个方向都藏不住。
+  const NON_READ = ['batch_convert', 'cancel_job', 'convert_file']
+  check(
+    `等级表的键集与工具名完全一致（${nameKeys.length} 个）`,
+    diffSet(Object.keys(TOOL_ACCESS), nameKeys) === '',
+    diffSet(Object.keys(TOOL_ACCESS), nameKeys)
+  )
+  check(
+    `非只读工具恰好是这三个：${NON_READ.join(' / ')}`,
+    nonReadTools.length > 0 && diffSet([...nonReadTools].sort(), [...NON_READ].sort()) === '',
+    `实际：${[...nonReadTools].sort().join(' / ') || '（无）'}`
+  )
+  // 具体到那个 bug 本身：它会写盘，所以**绝不能**是 'read'。
+  check(
+    "convert_file 是 'add' 不是 'read'（它往用户盘上写产物——这里曾经标错，见上面的注释）",
+    accessOf.convert_file === 'add',
+    `实际 ${accessOf.convert_file}`
+  )
+  // hint 组合只有这三种，且**没有一种**自相矛盾（只读 + destructive 是写不出来的形状）。
+  const hintRows: [string, { readOnlyHint?: boolean; destructiveHint?: boolean }][] = [
+    ['read', ACCESS_HINTS.read],
+    ['add', ACCESS_HINTS.add],
+    ['destroy', ACCESS_HINTS.destroy]
+  ]
+  check(
+    '三种等级各自映射到预期的 hint 组合',
+    ACCESS_HINTS.read.readOnlyHint === true &&
+      ACCESS_HINTS.read.idempotentHint === true &&
+      ACCESS_HINTS.add.readOnlyHint === false &&
+      ACCESS_HINTS.add.destructiveHint === false &&
+      ACCESS_HINTS.destroy.readOnlyHint === false &&
+      ACCESS_HINTS.destroy.destructiveHint === true,
+    hintRows.map(([k, v]) => `${k}=${JSON.stringify(v)}`).join(' ')
+  )
+  check(
+    '没有任何一种等级同时自称「只读」与「会毁坏」（自相矛盾的形状不该存在）',
+    hintRows.every(([, v]) => !(v.readOnlyHint === true && v.destructiveHint === true)),
+    hintRows.map(([k]) => k).join(' / ')
   )
   // E-8：**上限**断言。上面那条集合相等管的是「名字对不对」，管不了「要不要再多加一个」
   // ——加一个工具时人会顺手把 `EXPECTED_TOOLS` 一起改掉，集合相等照样绿。
@@ -316,11 +372,13 @@ async function main(): Promise<void> {
     ) === '',
     `实际：${views.map((view) => view.category).join(', ')}`
   )
+  // ⚠️ P6 之后这条**改了查的对象**：`CATEGORY_LABELS` 存的是**字典键**
+  // （`category.video` 这种），键当然永远非空——再查它就成了空转。
+  // 它想守的是「对外视图里的 `label` 有没有落空」，所以改查 `views[].label`。
   check(
-    '六个类别都有非空中文标签（防空转：漏一行会变成 undefined 而看起来只是少一段）',
-    diffSet(Object.keys(viewModule.CATEGORY_LABELS), [...CATEGORIES]) === '' &&
-      CATEGORIES.every((cat) => (viewModule.CATEGORY_LABELS[cat] ?? '').length > 0),
-    JSON.stringify(viewModule.CATEGORY_LABELS)
+    '六个类别都有非空标签（防空转：漏一行会变成 undefined 而看起来只是少一段）',
+    CATEGORIES.every((cat) => (views.find((v) => v.category === cat)?.label ?? '').length > 0),
+    JSON.stringify(views.map((v) => [v.category, v.label]))
   )
 
   for (const view of views) {

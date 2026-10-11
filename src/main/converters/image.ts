@@ -4,6 +4,7 @@ import { basename, dirname, join } from 'path'
 import sharp, { type Sharp } from 'sharp'
 import type { FilterAction, TaskProgress } from '@shared/types'
 import { formatBytes } from '@shared/format'
+import { stagePair, type StageRef } from '@shared/i18n/stage'
 import type { CancelToken } from '../core/cancel'
 import { partPathOf } from '../core/outputName'
 import { decodeHeif, type HeifPixels } from './heic'
@@ -207,10 +208,14 @@ const FILTER_BUILDERS: {
  * 最忌讳的那类「不报错的错误答案」。
  */
 function notOnImages(_pipeline: Sharp, action: FilterAction): Sharp {
-  throw new ConversionFailed([
-    `处理步骤「${action.kind}」不适用于图片`,
-    '这一步只对视频 / 音频有意义。这是一条内部错误：契约层的判据本该拦住它'
-  ])
+  throw new ConversionFailed(
+    [
+      `处理步骤「${action.kind}」不适用于图片`,
+      '这一步只对视频 / 音频有意义。这是一条内部错误：契约层的判据本该拦住它'
+    ],
+    undefined,
+    { key: 'err.image.filterNotApplicable' }
+  )
 }
 
 /**
@@ -300,7 +305,11 @@ async function encodeToTargetBytes(
     round += 1
     const probe = join(dir, `${base}.probe${round}.${toExt}`)
     probes.push(probe)
-    onProgress({ kind: 'indeterminate', stage: `压缩到目标体积…（第 ${round} 次试探）` })
+    onProgress({
+      kind: 'indeterminate',
+      // 中文兜底由字典出（逐字等于迁移前那句），同时带上码给渲染层按当前语言重翻
+      ...stagePair({ key: 'stage.image.searchQuality', params: { round } })
+    })
     await make({ quality, effort: isAvif ? AVIF_SEARCH_EFFORT : undefined }).toFile(probe)
     return (await stat(probe)).size
   }
@@ -314,10 +323,16 @@ async function encodeToTargetBytes(
       if (floorSize > budget) {
         // 「体积优先」不等于「不计代价」：连最低质量都装不下时，交出一个画质崩掉、
         // 体积仍然不达标的产物没有任何意义。宁可明说做不到。
-        throw new ConversionFailed([
-          `压到 ${formatBytes(targetBytes)} 做不到：质量降到最低档，产物仍有 ${formatBytes(floorSize)}。`,
-          `请把目标体积调大，或先用处理链缩小尺寸。`
-        ])
+        throw new ConversionFailed(
+          [
+            `压到 ${formatBytes(targetBytes)} 做不到：质量降到最低档，产物仍有 ${formatBytes(floorSize)}。`,
+            `请把目标体积调大，或先用处理链缩小尺寸。`
+          ],
+          undefined,
+          // ⚠️ 与下面那处**共用一条文案**（`summarize()` 取的是最后一行，两处的
+          // 那一行是同一句），所以也共用一个键——两条键写同一句话迟早会漂。
+          { key: 'err.image.tooSmall' }
+        )
       }
 
       // lo 已知装得下、hi 已知装不下，二分收敛到「装得下的最大质量」
@@ -335,16 +350,20 @@ async function encodeToTargetBytes(
     // 正式产物必须按各格式的默认档出，否则等于为了体积偷偷降了一次画质。
     let chosen = quality
     for (let step = 0; ; step += 1) {
-      onProgress({ kind: 'indeterminate', stage: '编码中…' })
+      onProgress({ kind: 'indeterminate', ...stagePair({ key: 'stage.image.encode' }) })
       await make({ quality: chosen }).toFile(tempPath)
       const size = (await stat(tempPath)).size
       if (size <= targetBytes) return
       // effort 提上去之后同样的质量通常编得更大，所以这里还有一次**有界**的回退。
       if (!isAvif || step >= FINAL_DESCENT_STEPS || chosen <= MIN_SEARCH_QUALITY) {
-        throw new ConversionFailed([
-          `压到 ${formatBytes(targetBytes)} 做不到：最终产物是 ${formatBytes(size)}。`,
-          `请把目标体积调大，或先用处理链缩小尺寸。`
-        ])
+        throw new ConversionFailed(
+          [
+            `压到 ${formatBytes(targetBytes)} 做不到：最终产物是 ${formatBytes(size)}。`,
+            `请把目标体积调大，或先用处理链缩小尺寸。`
+          ],
+          undefined,
+          { key: 'err.image.tooSmall' }
+        )
       }
       chosen = Math.max(MIN_SEARCH_QUALITY, chosen - FINAL_DESCENT_STEP)
     }
@@ -352,6 +371,23 @@ async function encodeToTargetBytes(
     for (const probe of probes) await removeQuietly(probe)
   }
 }
+
+/**
+ * `encode()` 要报的那个阶段。**两种形态，而第二种是暂时的、只允许出现在一个地方**。
+ *
+ * 正常形态就是一条 `StageRef`（码），中文兜底文本由 `stagePair()` 从字典算出来——
+ * 调用方一个中文字符都不写，见 `@shared/i18n/stage` 的文件头。
+ *
+ * ⚠️ **`{ fallback }` 这一支是「字典缺键」的记账**：`编码动图…` 在
+ * `src/shared/i18n/parts/stage.ts` 里**还没有条目**（本次交付已报告，缺的是
+ * `stage.image.encodeAnimated`）。字典不归这条线改，所以动图那一个调用点只能原样
+ * 交字面量——**没有 `stageRef`**，渲染层拿到它就走 `stageText(undefined, …)` 那条
+ * 兜底路（显示中文）。补上键之后这一支就该删掉，全文件就再没有裸字面量了。
+ *
+ * 写成联合类型而不是把参数退回 `string`，是为了让「字典缺键」在**类型上看得见**：
+ * 退回 `string` 的话，谁都能顺手再塞一句中文进来，而那种漂没有任何地方会报错。
+ */
+type EncodeStage = StageRef
 
 /**
  * 一条管线 + 它该报的那个阶段文案。没有体积目标时直接编，有的话走二分。
@@ -365,13 +401,13 @@ async function encode(
   toExt: string,
   tempPath: string,
   targetBytes: number | undefined,
-  stage: string,
+  stage: EncodeStage,
   onProgress: (progress: TaskProgress) => void
 ): Promise<void> {
   if (targetBytes === undefined) {
     // 这一句是**编码前的最后一次**取消检查：它排在 `make({})`（构建管线，含滤镜与编码器）
     // 与 `toFile()`（真正开编）之前，取消请求在这里就兑现，不必等它编完。
-    onProgress({ kind: 'indeterminate', stage })
+    onProgress({ kind: 'indeterminate', ...stagePair(stage) })
     await make({}).toFile(tempPath)
     return
   }
@@ -479,7 +515,7 @@ export async function runSharp(options: ConvertContext): Promise<void> {
     onProgress(progress)
   }
 
-  report({ kind: 'indeterminate', stage: '读取图片…' })
+  report({ kind: 'indeterminate', ...stagePair({ key: 'stage.image.read' }) })
 
   // 只有 sharp 读不了的源才建临时目录：常见格式不该为它多付一次 mkdtemp
   let tempDir: string | null = null
@@ -495,7 +531,10 @@ export async function runSharp(options: ConvertContext): Promise<void> {
     const meta = await sharp(source, { failOn: 'none', limitInputPixels: MAX_PIXELS }).metadata()
 
     if (!meta.format) {
-      throw new ConversionFailed([`无法识别的图片格式：${input}`])
+      throw new ConversionFailed([`无法识别的图片格式：${input}`], undefined, {
+        key: 'err.image.unreadable',
+        params: { input }
+      })
     }
 
     // 「这个目标 + 这张图」根本做不了体积目标时，**在开跑之前就拒**。
@@ -507,7 +546,7 @@ export async function runSharp(options: ConvertContext): Promise<void> {
     }
 
     if (meta.compression === 'hevc') {
-      report({ kind: 'indeterminate', stage: '解 HEIC…' })
+      report({ kind: 'indeterminate', ...stagePair({ key: 'stage.image.decodeHeic' }) })
       const expected =
         meta.width && meta.height ? { width: meta.width, height: meta.height } : undefined
       const pixels = await decodeHeif(source, expected)
@@ -516,7 +555,7 @@ export async function runSharp(options: ConvertContext): Promise<void> {
         toExt,
         tempPath,
         targetBytes,
-        '编码中…',
+        { key: 'stage.image.encode' },
         report
       )
     } else {
@@ -526,7 +565,11 @@ export async function runSharp(options: ConvertContext): Promise<void> {
         toExt,
         tempPath,
         targetBytes,
-        keepAnimation ? '编码动图…' : '编码中…',
+        // ⚠️ 动图那一支是**字典缺键**（`编码动图…` 在 `parts/stage.ts` 里没有条目，
+        // 本次交付已报告）：补上 `stage.image.encodeAnimated` 之后，这里就该回到
+        // `keepAnimation ? { key: 'stage.image.encodeAnimated' } : { key: 'stage.image.encode' }`，
+        // 且 `EncodeStage` 的 `{ fallback }` 那一支随之删掉。
+        keepAnimation ? { key: 'stage.image.encodeAnimated' } : { key: 'stage.image.encode' },
         report
       )
     }

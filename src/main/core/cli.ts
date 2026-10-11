@@ -1,4 +1,5 @@
 import { resolve } from 'path'
+import { t } from '@shared/i18n'
 
 /**
  * 命令行入口的纯逻辑：解析 `--convert <文件> [--to <扩展名>]`，以及拼一条 Windows
@@ -111,7 +112,7 @@ export function parseConvertRequest(argv: readonly string[], cwd: string): CliPa
       if (arg.startsWith('--convert=')) {
         const value = flagValue(argv, i, '--convert')
         if (value === null || value === '') {
-          return { kind: 'error', message: '--convert 后面没有跟文件路径' }
+          return { kind: 'error', message: t('integration.cli.noConvertPath') }
         }
         paths.push(value)
         took += 1
@@ -131,7 +132,7 @@ export function parseConvertRequest(argv: readonly string[], cwd: string): CliPa
         paths.push(argv[i] as string)
         took += 1
       }
-      if (took === 0) return { kind: 'error', message: '--convert 后面没有跟文件路径' }
+      if (took === 0) return { kind: 'error', message: t('integration.cli.noConvertPath') }
       continue
     }
 
@@ -139,11 +140,11 @@ export function parseConvertRequest(argv: readonly string[], cwd: string): CliPa
       const value = flagValue(argv, i, '--to')
       i += consumedExtra(argv, i, '--to')
       if (value === null || value === '') {
-        return { kind: 'error', message: '--to 后面没有跟目标格式' }
+        return { kind: 'error', message: t('integration.cli.noTo') }
       }
       const ext = normalizeExt(value)
       if (!EXT_SHAPE.test(ext)) {
-        return { kind: 'error', message: `目标格式不像个扩展名：${value}` }
+        return { kind: 'error', message: t('integration.cli.badExt', { value }) }
       }
       to = ext
     }
@@ -151,7 +152,7 @@ export function parseConvertRequest(argv: readonly string[], cwd: string): CliPa
 
   if (!sawConvert) return { kind: 'none' }
   // `paths` 非空是必然的：上面每一条 `--convert` 分支要么 push 了东西、要么已经返回
-  if (paths.length === 0) return { kind: 'error', message: '--convert 后面没有跟文件路径' }
+  if (paths.length === 0) return { kind: 'error', message: t('integration.cli.noConvertPath') }
   // **每一个**都 resolve 成绝对路径：以 `-` 开头的文件名会被引擎当成选项，
   // 而 `resolve()` 之后路径必然以盘符或 `/` 开头，那种名字天然不可能存活（约束 2）。
   return { kind: 'convert', request: { paths: paths.map((item) => resolve(cwd, item)), to } }
@@ -314,8 +315,12 @@ export function parseCliRequest(argv: readonly string[], cwd: string): CliComman
 
   const first = argv[0]
   if (first === 'help') return { kind: 'help' }
-  if (first === undefined) return { kind: 'error', message: '缺少子命令', json }
-  if (first !== 'convert') return { kind: 'error', message: `未知的子命令：${first}`, json }
+  if (first === undefined) {
+    return { kind: 'error', message: t('integration.cli.missingSubcommand'), json }
+  }
+  if (first !== 'convert') {
+    return { kind: 'error', message: t('integration.cli.unknownSubcommand', { name: first }), json }
+  }
 
   const paths: string[] = []
   let to: string | null = null
@@ -331,11 +336,11 @@ export function parseCliRequest(argv: readonly string[], cwd: string): CliComman
       const value = flagValue(argv, i, '--to')
       i += consumedExtra(argv, i, '--to')
       if (value === null || value === '') {
-        return { kind: 'error', message: '--to 后面没有跟目标格式', json }
+        return { kind: 'error', message: t('integration.cli.noTo'), json }
       }
       const ext = normalizeExt(value)
       if (!EXT_SHAPE.test(ext)) {
-        return { kind: 'error', message: `目标格式不像个扩展名：${value}`, json }
+        return { kind: 'error', message: t('integration.cli.badExt', { value }), json }
       }
       to = ext
       continue
@@ -345,7 +350,7 @@ export function parseCliRequest(argv: readonly string[], cwd: string): CliComman
       const value = flagValue(argv, i, '--out')
       i += consumedExtra(argv, i, '--out')
       if (value === null || value === '') {
-        return { kind: 'error', message: '--out 后面没有跟输出路径', json }
+        return { kind: 'error', message: t('integration.cli.noOut'), json }
       }
       out = resolve(cwd, value)
       continue
@@ -355,24 +360,26 @@ export function parseCliRequest(argv: readonly string[], cwd: string): CliComman
       const value = flagValue(argv, i, '--recipe')
       i += consumedExtra(argv, i, '--recipe')
       if (value === null || value === '') {
-        return { kind: 'error', message: '--recipe 后面没有跟配方文件路径', json }
+        return { kind: 'error', message: t('integration.cli.noRecipe'), json }
       }
       recipePath = resolve(cwd, value)
       continue
     }
 
     if (arg.startsWith('--')) {
-      return { kind: 'error', message: `未知的选项：${arg}`, json }
+      return { kind: 'error', message: t('integration.cli.unknownOption', { name: arg }), json }
     }
 
     paths.push(arg)
   }
 
-  if (paths.length === 0) return { kind: 'error', message: 'convert 后面没有跟文件路径', json }
+  if (paths.length === 0) {
+    return { kind: 'error', message: t('integration.cli.noConvertFile'), json }
+  }
   if (out !== null && paths.length > 1) {
     return {
       kind: 'error',
-      message: `--out 只能配一个源文件，这次给了 ${paths.length} 个`,
+      message: t('integration.cli.outSingleSource', { count: paths.length }),
       json
     }
   }

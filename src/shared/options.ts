@@ -3,11 +3,16 @@ import type {
   DenoiseStrength,
   FilterAction,
   OutputOptions,
+  QualityOptions,
   ResizeAction,
   TaskOptions
 } from './types'
 import { formatBytes } from './format'
 import { canTrim, describeTrim } from './trim'
+import { categoryOf } from './formats'
+// 摘要那几句**按当前语言**产出。这里是 shared，两条 import 都是相对路径——
+// 这个模块要被 main / renderer / mcp / cli 四方 import，路径别名不一定在每一侧都配好。
+import { t, type KeysOf } from './i18n'
 
 /**
  * 任务参数的**判据、限额与文案**，main 与 renderer 共用一份。
@@ -59,6 +64,25 @@ export const MAX_IMAGE_DIM = 65_535
  */
 export const MAX_FILTER_ACTIONS = 16
 
+/**
+ * CRF 的上下界。
+ *
+ * **0~51 是 libx264 自己的定义域**，照抄过来而不是自己另划一条线：界面上放行一个
+ * ffmpeg 会顶回来的值，表现是「点了应用什么都没发生」；而卡得比 51 还紧，
+ * 表现是「我想无损却选不了 0」。两端都不是我们该替用户决定的。
+ *
+ * ⚠️ 这几个数字**只对 x264 成立**（libvpx-vp9 的 CRF 是 0~63），而这一项本来就
+ * 只对 `supportsQuality()` 放行的出口开放，所以不必按出口分叉。
+ */
+export const MIN_CRF = 0
+export const MAX_CRF = 51
+
+/** 省略 CRF 时用的值。与加这个参数之前写死在 `videoArgs` 里的那个数**是同一个**。 */
+export const DEFAULT_CRF = 23
+
+/** 省略预设时用的档。同上，是加这个参数之前写死的那个。 */
+export const DEFAULT_PRESET = 'veryfast'
+
 /* ------------------------------------------------------------------ 判据 */
 
 /**
@@ -74,6 +98,54 @@ export const MAX_FILTER_ACTIONS = 16
  */
 export function canOutputSize(category: Category): boolean {
   return category === 'video' || category === 'audio' || category === 'image'
+}
+
+/**
+ * 这一类能不能设编码质量档。
+ *
+ * **只有视频**。音频那几档（`-q:a 2`、`-b:a`）名义上也是「质量」，但它们已经是
+ * 写死的合理值，而重新暴露一遍等于给同一样东西开第二个入口；图片的质量在
+ * `TaskOptions.output` 那条路上（二分搜索），不是恒定质量。
+ *
+ * 与 `canOutputSize` 一样，这是**判据**不是展示偏好——界面藏起来只挡住拖拽与点击，
+ * MCP / 右键菜单参数那些入口绕得过去，而绕过去的表现是「参数设上了、引擎按另一条
+ * 分支跑，参数静默失效」。
+ */
+export function canUseQuality(category: Category): boolean {
+  return category === 'video'
+}
+
+/**
+ * 视频出口里**不认**编码三件套的那些。
+ *
+ * - `webm` 走 `libvpx-vp9`：它的质量旋钮是 `-crf`（0~63，与 x264 **不是一个定义域**），
+ *   速度旋钮是 `-deadline` / `-cpu-used`，而且**没有** `-tune film/animation/grain`
+ *   那一套。把 x264 的参数照搬过去，轻则被 ffmpeg 当未知选项拒掉，
+ *   重则（`-preset`）被 libvpx 静默忽略、用户以为设了 slow 其实还是默认速度。
+ * - `gif` 走调色板滤镜（`palettegen`/`paletteuse`），根本没有码率或质量旋钮。
+ *
+ * 写成**排除表**而不是包含表：包含表得把 `mp4 / mkv / mov / avi / m4v` 一个个列出来，
+ * 而能力矩阵里将来加一个视频目标（比如把 `wmv` 也接成出口）时，那张表不会自动跟上，
+ * 后果是「新出口明明走 x264，界面上却选不了质量档」——一种没人会想到去查的缺失。
+ */
+const NON_X264_VIDEO_TARGETS = new Set(['webm', 'gif'])
+
+/**
+ * 这个**出口格式**认不认编码三件套。
+ *
+ * 判据是「它是不是一个走 libx264 的视频出口」，所以先从能力矩阵问「这是不是视频格式」
+ * （`categoryOf`），再排掉 webm / gif 那两个特例——**不另写一张扩展名白名单**，
+ * 另一张表必然与 `formats.ts` 漂移，而漂移的表现是「界面上说能设，设上去引擎报错」。
+ *
+ * `categoryOf` 而不是 `canUseQuality`：后者收的是源的类别，这里问的是**出口**。
+ * 两者不是一回事——`mp4 → gif` 的源类别是 video，而 gif 这个出口不认质量档。
+ * 目标格式在参数设完之后还能改（`setTarget`），所以这一条**在转换开始前还要再判一次**
+ * （见 `converters/ffmpegRun.ts`），否则「先设质量档、再把目标改成 webm」会静默失效。
+ */
+export function supportsQuality(toExt: string): boolean {
+  const to = toExt.toLowerCase()
+  if (categoryOf(to) !== 'video') return false
+  return !NON_X264_VIDEO_TARGETS.has(to)
 }
 
 /**
@@ -125,28 +197,59 @@ export function canUseAction(action: FilterAction, category: Category): boolean 
  * 而忘了改各面板的话，按钮会照着老清单出现，点开却是空的。
  */
 export function hasAnyOptions(category: Category): boolean {
-  return canTrim(category) || canOutputSize(category) || canFilter(category)
+  // `canUseQuality` 今天被 `canOutputSize` 完全覆盖（两者都只在 video 上为真），
+  // 列在这里是**结构上**的要求：将来哪个类别只开放质量档而关了输出约束时，
+  // 漏了它就等于那个类别的「参数」按钮永远不出现，而参数面板明明有内容。
+  return (
+    canTrim(category) || canOutputSize(category) || canFilter(category) || canUseQuality(category)
+  )
 }
 
 /* ------------------------------------------------------------------ 文案 */
 
 /** 码率的单位是 kbps，显示成 `8000kbps`——与 ffmpeg 命令行里的写法一致，便于用户核对。 */
 export function describeOutput(output: OutputOptions): string {
-  if (output.targetBytes !== undefined) return `目标体积 ${formatBytes(output.targetBytes)}`
-  if (output.bitrateKbps !== undefined) return `码率 ${output.bitrateKbps}kbps`
+  if (output.targetBytes !== undefined) {
+    return t('shared.output.targetBytes', { size: formatBytes(output.targetBytes) })
+  }
+  if (output.bitrateKbps !== undefined) {
+    return t('shared.output.bitrate', { rate: output.bitrateKbps })
+  }
   // schema 不允许走到这里（体积与码率必须二选一）。但这一行是**给人看的**，
   // 宁可说一句「没指定」也不抛——抛会让整张卡片渲染不出来，比少一句话严重得多。
-  return '输出限制（未指定）'
+  return t('shared.output.unspecified')
+}
+
+/**
+ * 编码质量档的文案。
+ *
+ * **三段各说各的，不合并成一句**：`CRF 18 · 预设 slow · 调优 film` 里每一项都能
+ * 单独看懂——而这一行同时出现在队列卡与历史页上，读到它的人手上没有别的线索。
+ * 写成「编码档 18/slow/film」的话，历史页上那一行是**唯一**的记忆，
+ * 三个数字挤在一起谁也认不出来。
+ *
+ * 顺序固定 crf → preset → tune，与 `TaskOptions` 里的声明顺序一致。
+ * 三者可以只给一个，所以每一段都是可选的；一个都没给不可能走到这里
+ * （schema 与 `setOptions` 都拒空对象），但这一行是**给人看的**，
+ * 宁可说一句「未指定」也不抛——抛会让整张卡片渲染不出来。
+ */
+export function describeQuality(quality: QualityOptions): string {
+  const parts: string[] = []
+  if (quality.crf !== undefined) parts.push(t('shared.quality.crf', { crf: quality.crf }))
+  if (quality.preset !== undefined)
+    parts.push(t('shared.quality.preset', { preset: quality.preset }))
+  if (quality.tune !== undefined) parts.push(t('shared.quality.tune', { tune: quality.tune }))
+  return parts.length > 0 ? parts.join(' · ') : t('shared.quality.unspecified')
 }
 
 function describeResize(action: ResizeAction): string {
   const parts: string[] = []
   if (action.width !== undefined && action.height !== undefined) {
-    parts.push(`缩到 ${action.width}×${action.height}`)
+    parts.push(t('shared.resize.to', { w: action.width, h: action.height }))
   } else if (action.width !== undefined) {
-    parts.push(`缩到宽 ${action.width}`)
+    parts.push(t('shared.resize.width', { w: action.width }))
   } else if (action.height !== undefined) {
-    parts.push(`缩到高 ${action.height}`)
+    parts.push(t('shared.resize.height', { h: action.height }))
   }
 
   // 下面两句只在**确实要缩图**的时候才说。分两句是因为它们的适用面不同：
@@ -159,21 +262,21 @@ function describeResize(action: ResizeAction): string {
   //   「缩到宽 1920」却拿到一张 800px 的图，会以为参数没生效。
   if (parts.length > 0) {
     if (action.width !== undefined && action.height !== undefined) {
-      if (action.fit === 'cover') parts.push('裁切填满')
-      if (action.fit === 'fill') parts.push('拉伸')
+      if (action.fit === 'cover') parts.push(t('shared.resize.cover'))
+      if (action.fit === 'fill') parts.push(t('shared.resize.fill'))
     }
-    if (action.withoutEnlargement) parts.push('不放大')
+    if (action.withoutEnlargement) parts.push(t('shared.resize.noEnlarge'))
   }
 
   // 理论上到不了（schema 要求宽高至少给一个），但这一行是给人看的，宁可说出实情。
-  return parts.length > 0 ? parts.join(' · ') : '缩放（未指定尺寸）'
+  return parts.length > 0 ? parts.join(' · ') : t('shared.resize.unspecified')
 }
 
 /** 三档降噪的中文名。**与 `DENOISE_STRENGTHS` 一一对应**，漏一档就是编译错误。 */
-const DENOISE_LABEL: Record<DenoiseStrength, string> = {
-  light: '轻',
-  medium: '中',
-  strong: '重'
+const DENOISE_LABEL: Record<DenoiseStrength, KeysOf<'shared.denoise.'>> = {
+  light: 'shared.denoise.light',
+  medium: 'shared.denoise.medium',
+  strong: 'shared.denoise.strong'
 }
 
 /**
@@ -186,15 +289,15 @@ export function describeAction(action: FilterAction): string {
     case 'resize':
       return describeResize(action)
     case 'deinterlace':
-      return `去隔行（${action.method}）`
+      return t('shared.action.deinterlace', { method: action.method })
     case 'denoise':
-      return `降噪（${DENOISE_LABEL[action.strength]}）`
+      return t('shared.action.denoise', { label: t(DENOISE_LABEL[action.strength]) })
     case 'sharpen':
-      return `锐化 ${action.amount}`
+      return t('shared.action.sharpen', { amount: action.amount })
     case 'loudnorm':
-      return `响度 ${action.targetLufs} LUFS`
+      return t('shared.action.loudnorm', { lufs: action.targetLufs })
     case 'rotate':
-      return `旋转 ${action.degrees}°`
+      return t('shared.action.rotate', { degrees: action.degrees })
     default: {
       // 加了一个联合成员却忘了在上面补分支时，**这一行会编译不过**
       const exhaustive: never = action
@@ -231,8 +334,23 @@ export function describeOptions(options?: TaskOptions): string | null {
   if (options.trim) parts.push(describeTrim(options.trim))
   if (options.filters && options.filters.length > 0) parts.push(describeFilters(options.filters))
   if (options.output) parts.push(describeOutput(options.output))
+  if (options.quality) parts.push(describeQuality(options.quality))
   return parts.length > 0 ? parts.join(' · ') : null
 }
+
+/**
+ * 「编码质量档与输出约束互斥」那句**统一文案**。
+ *
+ * 两处要用它，而且必须是同一句话：界面上那块面板的**禁用理由**，以及引擎真的收到
+ * 一份同时带了两者的参数时抛出的错误。分家的话，同一次矛盾在两处会有两种说法，
+ * 而用户读到的多半是其中一处——另一处看起来就像在说别的事。
+ *
+ * 为什么互斥得这么绝对（而不是「让 CRF 当上限、码率当目标」）：`-crf` 与 `-b:v`
+ * 同时出现时 x264 会**回到质量模式**、把 `-b:v` 只当上限，产物体积与目标彻底脱钩
+ * （`engines/ffmpeg.ts` 的 `EncodeTarget` 注释里记着这条）。那不是折中，是静默失效。
+ */
+export const QUALITY_OUTPUT_EXCLUSIVE =
+  '编码质量档与输出体积/码率目标互斥：前者按质量编、后者按码率编，同时给会让 -crf 与 -b:v 打架'
 
 /* ------------------------------------------------------------------ 组装 */
 

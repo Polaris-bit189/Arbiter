@@ -68,6 +68,11 @@ export async function convert(context: ConvertContext): Promise<void> {
       return runLibreOffice(context)
     }
 
+    case 'encmusic': {
+      const { runEncMusic } = await import('./encmusic')
+      return runEncMusic(context)
+    }
+
     case null:
       throw new ConversionFailed([`不支持的转换：${context.fromExt} → ${context.toExt}`])
 

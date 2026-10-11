@@ -1,10 +1,12 @@
 import { useState } from 'react'
+import { t } from '@shared/i18n'
 import type { OutputOptions, Task } from '@shared/types'
 import {
   MAX_BITRATE_KBPS,
   MAX_TARGET_BYTES,
   MIN_BITRATE_KBPS,
   MIN_TARGET_BYTES,
+  QUALITY_OUTPUT_EXCLUSIVE,
   withOption
 } from '@shared/options'
 import { useTasks } from '../../store/useTasks'
@@ -72,25 +74,33 @@ export function OutputSection({ task }: { task: Task }): React.JSX.Element {
    * （`Number('')` 是 `0` 不是 `NaN`）、先判「填了没」再判数值最后才判上下界。
    */
   const reason: string | null = ((): string | null => {
+    // ⚠️ **互斥那一条排在最前面**，压过下面那些输入框自己的校验：用户设了编码质量档之后
+    // 再来碰这一块，最要紧的一句话是「两者不能同时用」，而不是「体积不能为空」——
+    // 后者会让人以为把输入框填对了就能应用。
+    // 文案与 `QualitySection`、以及引擎抛出来的那句**同一个常量**（见它的说明）。
+    if (task.options?.quality !== undefined) return QUALITY_OUTPUT_EXCLUSIVE
+
     if (mode === 'targetBytes') {
       const raw = sizeText.trim()
-      if (raw === '') return '体积不能为空'
+      if (raw === '') return t('options.output.reasonSizeEmpty')
       const value = Number(raw)
-      if (!Number.isFinite(value)) return '只能填数字'
-      if (value <= 0) return '体积要大于 0'
+      if (!Number.isFinite(value)) return t('options.common.reasonNotNumber')
+      if (value <= 0) return t('options.output.reasonSizePositive')
       const bytes = Math.round(value * (unit === 'MB' ? MB : KB))
-      if (bytes < MIN_TARGET_BYTES) return `不能小于 ${MIN_TARGET_BYTES / KB} KB`
-      if (bytes > MAX_TARGET_BYTES) return `不能大于 ${MAX_TARGET_BYTES / GB} GB`
+      if (bytes < MIN_TARGET_BYTES)
+        return t('options.output.reasonSizeMin', { n: MIN_TARGET_BYTES / KB })
+      if (bytes > MAX_TARGET_BYTES)
+        return t('options.output.reasonSizeMax', { n: MAX_TARGET_BYTES / GB })
       return null
     }
 
     const raw = rateText.trim()
-    if (raw === '') return '码率不能为空'
+    if (raw === '') return t('options.output.reasonRateEmpty')
     const value = Number(raw)
-    if (!Number.isFinite(value)) return '只能填数字'
-    if (!Number.isInteger(value)) return '码率是整数（单位 kbps）'
-    if (value < MIN_BITRATE_KBPS) return `不能小于 ${MIN_BITRATE_KBPS} kbps`
-    if (value > MAX_BITRATE_KBPS) return `不能大于 ${MAX_BITRATE_KBPS} kbps`
+    if (!Number.isFinite(value)) return t('options.common.reasonNotNumber')
+    if (!Number.isInteger(value)) return t('options.output.reasonRateInteger')
+    if (value < MIN_BITRATE_KBPS) return t('options.output.reasonRateMin', { n: MIN_BITRATE_KBPS })
+    if (value > MAX_BITRATE_KBPS) return t('options.output.reasonRateMax', { n: MAX_BITRATE_KBPS })
     return null
   })()
 
@@ -137,17 +147,17 @@ export function OutputSection({ task }: { task: Task }): React.JSX.Element {
 
   return (
     <OptionsSection
-      title="输出约束（体积 / 码率，二选一）"
+      title={t('options.output.title')}
       reason={reason}
-      failedText={failed ? '没能设上——这条任务不接受输出约束，或它正在跑' : ''}
+      failedText={failed ? t('options.output.failed') : ''}
       busy={busy}
       canClear={current !== undefined}
       onApply={() => void apply()}
       onClear={() => void clear()}
     >
       <div className="mt-1.5 flex items-center gap-1.5">
-        {modeButton('targetBytes', '目标体积')}
-        {modeButton('bitrateKbps', '目标码率')}
+        {modeButton('targetBytes', t('options.output.modeSize'))}
+        {modeButton('bitrateKbps', t('options.output.modeBitrate'))}
       </div>
 
       {mode === 'targetBytes' ? (
@@ -156,7 +166,7 @@ export function OutputSection({ task }: { task: Task }): React.JSX.Element {
             type="text"
             inputMode="decimal"
             value={sizeText}
-            aria-label="目标体积"
+            aria-label={t('options.output.sizeAria')}
             onChange={(e) => setSizeText(e.target.value)}
             className="w-24 rounded border border-line bg-canvas px-2 py-1 font-mono text-xs text-fg outline-none focus:border-gold-dim"
           />
@@ -184,7 +194,7 @@ export function OutputSection({ task }: { task: Task }): React.JSX.Element {
             type="text"
             inputMode="numeric"
             value={rateText}
-            aria-label="目标码率"
+            aria-label={t('options.output.bitrateAria')}
             onChange={(e) => setRateText(e.target.value)}
             className="w-24 rounded border border-line bg-canvas px-2 py-1 font-mono text-xs text-fg outline-none focus:border-gold-dim"
           />
@@ -195,15 +205,15 @@ export function OutputSection({ task }: { task: Task }): React.JSX.Element {
       <p className="mt-2 text-[11px] leading-relaxed text-fg-faint">
         {mode === 'targetBytes' ? (
           <>
-            视频的体积目标要先把整片分析一遍再编（
-            <span className="text-gold-pale">耗时接近翻倍</span>
-            ），换来的是产物体积确实受控。图片改的是质量（二分搜索），音频直接按码率压。
-            它要求引擎重新编码，所以与「无损裁剪」不能同时用——两者一起提交会被拒。
+            {t('options.output.sizeHintLead')}
+            <span className="text-gold-pale">{t('options.output.sizeHintDouble')}</span>
+            {t('options.output.sizeHintRest')}
           </>
         ) : (
           <>
-            直接指定码率（kb<span className="text-gold-pale">ps</span>
-            ），单遍编码，比体积目标快得多。它同样要求重新编码，与无损裁剪互斥。
+            {t('options.output.rateHintLead')}
+            <span className="text-gold-pale">ps</span>
+            {t('options.output.rateHintRest')}
           </>
         )}
       </p>

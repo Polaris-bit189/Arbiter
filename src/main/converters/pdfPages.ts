@@ -2,6 +2,7 @@ import { existsSync, readdirSync } from 'fs'
 import { readFile, writeFile } from 'fs/promises'
 import { createRequire } from 'module'
 import { dirname, join } from 'path'
+import { stagePair } from '@shared/i18n/stage'
 import { baseNameOf, partPathOf } from '../core/outputName'
 import { loadPdfjs } from './pdfText'
 import {
@@ -234,7 +235,13 @@ export async function renderPdfPages(context: ConvertContext): Promise<void> {
 
       staged.push({ temp: tempPath, final: finalPath })
       page.cleanup()
-      onProgress({ kind: 'batch', done: n, total, stage: '导出第' })
+      // 页数与总数**不进句子**：渲染层是 `${stage} ${done}/${total}`（见
+      // `components/TaskCard.tsx`），所以这一条**不带参数**。
+      //
+      // ⚠️ `stage.pdf.exportPage` 是 P5 迁移时**才补进字典**的（值就取自原先那句
+      // 裸字面量 `'导出第'`，逐字相同）——本文件这一条是唯一一条 `kind: 'batch'`
+      // 的进度，补键之前这里既没有码、也没有 `stageRef`。
+      onProgress({ kind: 'batch', done: n, total, ...stagePair({ key: 'stage.pdf.exportPage' }) })
     }
 
     // 最后一页渲染完到落盘之间还有一段，取消要在这里再确认一次

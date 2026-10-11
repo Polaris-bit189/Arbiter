@@ -3,7 +3,9 @@ import { homedir } from 'os'
 import { join, resolve } from 'path'
 import { fileURLToPath } from 'url'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
+import { t } from '@shared/i18n'
 import { isAsarPath, setAppPaths, type AppPaths } from '../main/core/appPaths'
+import { applyLocale } from '../main/core/locale'
 import { JobRegistry } from './jobs'
 import { createPathGate } from './paths'
 import { createServer } from './server'
@@ -47,15 +49,21 @@ function envPath(name: string): string | null {
 }
 
 /**
- * 算出一份能用的 `AppPaths`，**只在结构性判据证明装配与实际不符时**往 stderr 报一句。
+ * 算出一份能用的 `AppPaths`，**只在结构性判据证明装配与实际不符时**记一笔。
  *
  * `ARBITER_*` 这一组环境变量是启动器（`plugins/arbiter/mcp/target.mjs` 的 `entryEnv()`）
  * 拉起 MCP 时给的；开发期不设也能跑，因为 dev 下这五个值恰好都能从仓库位置推出来。
  *
  * 那个启动器对 GUI 与 CLI 一视同仁地传同一组变量，而**打包形态是五件全传、仓库形态
  * 只传 `ARBITER_APP_PATH`**——两种形态在这两条判据下都一声不吭（实测）。
+ *
+ * ⚠️ **它只「记」不「说」**：告警的打印被挪到了 `main()` 里 `applyLocale()` **之后**。
+ * 原因是个结构性的时序——`t()` 取的是 `@shared/i18n` 的全局语言，而那份全局由
+ * `applyLocale()` 装上，`applyLocale()` 又要 `setAppPaths()` 之后才读得到设置
+ * （`core/settings.ts` 走 `userData`）。在这个函数里打印，拿到的必然是**启动时那门
+ * 语言**（默认 zh），于是文案翻了却永远是中文——比不翻更坏。
  */
-function resolvePaths(): AppPaths {
+function resolvePaths(): { paths: AppPaths; problems: string[] } {
   /** 这个文件在 `<仓库根>/src/mcp/main.ts`，往上两层是仓库根 */
   const here = fileURLToPath(new URL('.', import.meta.url))
   const guessedAppPath = resolve(here, '..', '..')
@@ -84,9 +92,7 @@ function resolvePaths(): AppPaths {
   // 随包引擎被判成「没装」。落地症状是只剩 `7zip-bin` 的精简版 `7za.exe` 兜底，
   // **RAR 悄悄不支持了**，一句错都不报。
   if (isPackaged && !existsSync(resourcesPath)) {
-    problems.push(
-      `resourcesPath=${resourcesPath} 不存在：打包形态下随包引擎就在它下面，缺了它会被判成「没装」`
-    )
+    problems.push(t('mcp.main.problemResourcesPath', { path: resourcesPath }))
   }
 
   // 判据二：`appPath` 指着 asar，但 `ARBITER_IS_PACKAGED` 不是 `1`。
@@ -94,36 +100,38 @@ function resolvePaths(): AppPaths {
   // 判据本体在 `core/appPaths.ts` 的 `isAsarPath()`——与 `src/cli/main.ts` 共用一个实现，
   // 两边不会漂（曾经各写一份，那正是「同一事实两个副本」的形态）。
   if (!isPackaged && isAsarPath(appPath)) {
-    problems.push(
-      `appPath=${appPath} 指向 asar 内部，但 ARBITER_IS_PACKAGED 不是 1：` +
-        '引擎解析会走 dev 分支，随包引擎找不到'
-    )
+    problems.push(t('mcp.main.problemAsarAppPath', { path: appPath }))
   }
 
   // ⚠️ **告警范围是收窄过的，别改回「凡是没给环境变量就报」。** 那种写法对着**正常形态**
   // 也会响（仓库形态、以及装机启动器只传一部分变量的形态），而报出来的值**全都是对的**——
   // 一份只在自己没出错时才叫的告警，等于训练人忽略它。收窄的完整理由、以及为什么
   // `userData` / `downloads` **一条判据都不留**，写在 `src/cli/main.ts` 的 `resolvePaths()` 上。
-  if (problems.length > 0) {
-    // 五条值只在**出事时**才打，而那一刻正是人要看它们的时刻。环境变量名写全——
-    // 不写「见 --help」，那会把指到一个查不到这一段的地方。
-    const used = [
-      `    appPath=${appPath}`,
-      `    resourcesPath=${resourcesPath}`,
-      `    userData=${userData}`,
-      `    downloads=${downloads}`,
-      `    isPackaged=${isPackaged}`
-    ]
-    // 只走 stderr：stdout 是 JSON-RPC 协议通道（见 `./stdout.ts` 与 docs/NOTES.md 约束 20）。
-    process.stderr.write(
-      '[arbiter-mcp] 路径装配与实际不符（这会让已经装好的引擎被判成「没装」）：\n' +
-        problems.map((p) => `  - ${p}\n`).join('') +
-        '  本次实际用的值（ARBITER_APP_PATH / ARBITER_RESOURCES_PATH / ' +
-        'ARBITER_IS_PACKAGED / ARBITER_USER_DATA / ARBITER_DOWNLOADS 可以覆盖）：\n' +
-        used.map((line) => `${line}\n`).join('')
-    )
-  }
-  return paths
+  return { paths, problems }
+}
+
+/**
+ * 把装配自检的结论打出来。**必须在 `applyLocale()` 之后调**（理由见 `resolvePaths`）。
+ *
+ * 五条值只在**出事时**才打，而那一刻正是人要看它们的时刻。环境变量名写全——
+ * 不写「见 --help」，那会把指到一个查不到这一段的地方。
+ */
+function reportPathProblems(paths: AppPaths, problems: string[]): void {
+  if (problems.length === 0) return
+  const used = [
+    `    appPath=${paths.appPath}`,
+    `    resourcesPath=${paths.resourcesPath}`,
+    `    userData=${paths.userData}`,
+    `    downloads=${paths.downloads}`,
+    `    isPackaged=${paths.isPackaged}`
+  ]
+  // 只走 stderr：stdout 是 JSON-RPC 协议通道（见 `./stdout.ts` 与 docs/NOTES.md 约束 20）。
+  process.stderr.write(
+    t('mcp.main.assemblyWarningHead') +
+      problems.map((p) => `  - ${p}\n`).join('') +
+      t('mcp.main.assemblyWarningUsed') +
+      used.map((line) => `${line}\n`).join('')
+  )
 }
 
 /** 版本号：读得到 package.json 就用它，读不到不编。 */
@@ -146,8 +154,17 @@ function resolveVersion(appPath: string): string {
 async function main(): Promise<void> {
   protectStdout()
 
-  const paths = resolvePaths()
+  const { paths, problems } = resolvePaths()
   setAppPaths(paths)
+
+  // 语言：MCP 这一侧**没有「系统语言」这个概念**（这里没有 Electron，消费者是 agent）。
+  // 所以 effectiveLocale() 不注入系统语言源，'system' 会解析成 'zh'——
+  // 未设置时恒为中文，现有全部 MCP 断言与反证锚点因此原样成立。
+  // agent 要用英文，就在 .mcp.json 里设 ARBITER_LOCALE=en。
+  applyLocale()
+
+  // 装配自检的告警**只能等到这里**才打得出当前语言（见 `resolvePaths` 的说明）。
+  reportPathProblems(paths, problems)
 
   const cwd = process.cwd()
   const gate = createPathGate({ cwd, userData: paths.userData })
@@ -164,6 +181,11 @@ async function main(): Promise<void> {
    * `taskkill /T /F` 杀进程树），再留一点时间让它们真的死掉，最后才退出。
    * 直接 `process.exit()` 会把 ffmpeg 变成孤儿——它不属于任何进程组，
    * 之后就再没人管得了它了（约束 3）。
+   *
+   * ⚠️ **下面这三个 reason 与那行「正在收尾…」故意**不进字典**（C 类，约束 43）**：
+   * 它们是生命周期日志，与 `[engine] …` / `[task] …` / `[pdf] …` 那几条同族——
+   * **原始记录，永不翻译**。用户不会因为它是英文而多懂一分，而翻它只会让同一条
+   * 日志随语言设置改变形状。逐条清单见 `@shared/i18n/parts/mcpMain.ts` 的文件头。
    */
   let closing = false
   const shutdown = (reason: string): void => {
@@ -181,6 +203,10 @@ async function main(): Promise<void> {
   process.stdin.on('close', () => shutdown('stdin 关闭（客户端断开）'))
 
   await server.connect(transport)
+  // 就绪横幅同样是 C 类（不进字典）。除了「原始记录」那条理由，它还有一条硬约束：
+  // `test-mcp-server.ts` 与 `test-plugin-launch.mjs` 都拿 `已就绪` 这个**子串**判
+  // 「服务起没起来」，翻它等于把两个套件绑在语言设置上（`ARBITER_LOCALE=en` 时那两个
+  // 等待会一直等下去，表现是「套件挂在半路、一条失败信息都没有」）。
   process.stderr.write(
     `[arbiter-mcp] 已就绪：cwd=${cwd} userData=${paths.userData} ` +
       `读根=${gate.roots.join(',')} 写根=${gate.writeRoots.join(',')}\n`
@@ -189,7 +215,7 @@ async function main(): Promise<void> {
 
 main().catch((error: unknown) => {
   // 启动期失败只能走 stderr：此刻 stdout 可能已经被客户端当成协议在读了。
-  process.stderr.write(`[arbiter-mcp] 启动失败：${inspectShallow(error)}\n`)
+  process.stderr.write(t('mcp.main.startupFailed', { error: inspectShallow(error) }))
   if (error instanceof Error && error.stack) process.stderr.write(`${error.stack}\n`)
   process.exit(1)
 })
